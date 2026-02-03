@@ -205,4 +205,3 @@ Delete the **system** file at your current working folder, it may make your node
 ## Donate The Project
 
 QUBIC Wallet: QPROLAPACSPVBDQADRXXKRGZMXADUAEXXJIQNWPGWFUFUAITRXMHVODDLGBK
-
