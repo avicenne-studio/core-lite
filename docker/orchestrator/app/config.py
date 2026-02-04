@@ -156,6 +156,7 @@ class OrchestratorConfig(BaseSettings):
     mode: OrchestratorMode = OrchestratorMode.NORMAL
     data_dir: str = "/qubic"
     binary_path: str = "/qubic/Qubic"
+    binary_staging_dir: str = "/opt/qubic-bin"
     log_level: str = "INFO"
     log_format: str = "json"
 

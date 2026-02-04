@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 import signal
 import time
 from pathlib import Path
@@ -59,6 +60,9 @@ class Orchestrator:
         try:
             # Initialize components
             self._init_components()
+
+            # Ensure the volume has the binary from the current image
+            self._install_binary()
 
             # Read local binary version
             self._local_version = EpochService.read_local_version(
@@ -147,6 +151,62 @@ class Orchestrator:
             node_client=self._node_client,
             working_dir=self._data_dir,
         )
+
+    def _install_binary(self) -> None:
+        """Copy binary and metadata from the image staging dir to the data volume.
+
+        Docker only populates a named volume on first use.  When Watchtower
+        (or any updater) pulls a new image, the old binary persists on the
+        volume.  This method ensures the volume always has the binary that
+        shipped with the current image.
+
+        The copy is skipped when the volume already has a binary whose
+        version is equal to or newer than the staged one.
+        """
+        staging_dir = Path(self._config.binary_staging_dir)
+        if not staging_dir.is_dir():
+            logger.debug(
+                f"No staging directory at {staging_dir}, "
+                "skipping binary install"
+            )
+            return
+
+        staged_ver = EpochService.read_local_version(
+            str(staging_dir / "version.txt")
+        )
+        local_ver = EpochService.read_local_version(
+            str(self._data_dir / "version.txt")
+        )
+
+        if staged_ver and local_ver and local_ver >= staged_ver:
+            logger.info(
+                f"Binary on volume "
+                f"({EpochService.format_version(local_ver)}) is "
+                f"up-to-date with staged "
+                f"({EpochService.format_version(staged_ver)}), "
+                "skipping install"
+            )
+            return
+
+        staged_fmt = (
+            EpochService.format_version(staged_ver) if staged_ver else "?"
+        )
+        local_fmt = (
+            EpochService.format_version(local_ver) if local_ver else "none"
+        )
+        logger.info(
+            f"Updating binary on volume: {local_fmt} -> {staged_fmt}"
+        )
+
+        for name in ("Qubic", "epoch.txt", "version.txt"):
+            src = staging_dir / name
+            if not src.exists():
+                continue
+            dst = self._data_dir / name
+            shutil.copy2(src, dst)
+            if name == "Qubic":
+                dst.chmod(0o755)
+            logger.info(f"Installed {name} from image staging dir")
 
     async def _discover_epoch(self) -> EpochInfo:
         """Step 3: Query epoch info API or fall back to compiled epoch."""
