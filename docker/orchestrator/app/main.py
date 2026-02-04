@@ -8,6 +8,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import aiohttp
+
 from app.alerting import AlertManager
 from app.cleanup import Cleanup
 from app.config import OrchestratorConfig, load_config
@@ -208,6 +210,27 @@ class Orchestrator:
                 dst.chmod(0o755)
             logger.info(f"Installed {name} from image staging dir")
 
+    @staticmethod
+    async def _get_public_ip() -> Optional[str]:
+        """Resolve the node's public IP via an external service."""
+        services = [
+            "https://api.ipify.org",
+            "https://ifconfig.me/ip",
+            "https://icanhazip.com",
+        ]
+        timeout = aiohttp.ClientTimeout(total=5)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            for url in services:
+                try:
+                    async with session.get(url) as resp:
+                        if resp.status == 200:
+                            ip = (await resp.text()).strip()
+                            if ip:
+                                return ip
+                except Exception:
+                    continue
+        return None
+
     async def _discover_epoch(self) -> EpochInfo:
         """Step 3: Query epoch info API or fall back to compiled epoch."""
         logger.info("Discovering current epoch information...")
@@ -227,6 +250,15 @@ class Orchestrator:
         configured_peers = set(self._config.get_peers_list())
         api_peers = set(epoch_info.peers)
         all_peers = configured_peers | api_peers
+
+        # Add the node's own public IP so it can find itself in the network
+        public_ip = await self._get_public_ip()
+        if public_ip:
+            logger.info(f"Public IP: {public_ip}")
+            all_peers.add(public_ip)
+        else:
+            logger.warning("Could not determine public IP")
+
         epoch_info.peers = list(all_peers)
 
         return epoch_info
