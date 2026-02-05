@@ -53,7 +53,7 @@ class WatchdogConfig(BaseModel):
     stuck_threshold_seconds: int = 300
     stuck_consecutive_polls: int = 3
     misaligned_threshold_votes: int = 451
-    misaligned_consecutive_polls: int = 5
+    misaligned_threshold_seconds: int = 300  # 5 minutes of misalignment on the same tick
     max_restarts: int = 5
     restart_cooldown_seconds: int = 600
     crash_restart_delay_seconds: int = 10

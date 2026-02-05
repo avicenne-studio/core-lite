@@ -92,6 +92,7 @@ On startup the orchestrator:
 | `QUBIC_WATCHDOG__MAX_RESTARTS` | `5` | Max auto-restarts before giving up |
 | `QUBIC_WATCHDOG__STARTUP_GRACE_SECONDS` | `300` | Grace period before health checks start |
 | `QUBIC_WATCHDOG__STUCK_THRESHOLD_SECONDS` | `300` | Seconds without tick progress before restart |
+| `QUBIC_WATCHDOG__MISALIGNED_THRESHOLD_SECONDS` | `300` | Seconds misaligned on same tick before restart |
 | `QUBIC_WATCHDOG__RESTART_COOLDOWN_SECONDS` | `600` | Minimum time between restarts |
 
 ### Local Snapshot Saver
