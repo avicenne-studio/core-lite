@@ -11,7 +11,7 @@
 
 static std::string OPERATOR = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
-static std::vector<std::string> computorSeeds = {
+static unsigned char computorSeeds[][55 + 1] = {
 "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv",
 "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh",
 "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg",

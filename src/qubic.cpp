@@ -750,7 +750,7 @@ static void processBroadcastMessage(const unsigned long long processorNumber, Re
             }
             else
             {
-                for (unsigned int i = 0; i < computorSeeds.size(); i++)
+                for (unsigned int i = 0; i < computorSeedsCount; i++)
                 {
                     if (request->destinationPublicKey == computorPublicKeys[i])
                     {
@@ -899,7 +899,7 @@ static void processBroadcastComputors(Peer* peer, RequestResponseHeader* header)
                 {
                     minerPublicKeys[i] = request->computors.publicKeys[i];
 
-                    for (unsigned int j = 0; j < computorSeeds.size(); j++)
+                    for (unsigned int j = 0; j < computorSeedsCount; j++)
                     {
                         if (request->computors.publicKeys[i] == computorPublicKeys[j])
                         {
@@ -2853,7 +2853,7 @@ static void processTickTransactionSolution(const MiningSolutionTransaction* tran
                     }
                 }
 
-                for (unsigned int i = 0; i < computorSeeds.size(); i++)
+                for (unsigned int i = 0; i < computorSeedsCount; i++)
                 {
                     if (transaction->sourcePublicKey == computorPublicKeys[i])
                     {
@@ -3005,7 +3005,7 @@ static void processTickTransactionSolution(const MiningSolutionTransaction* tran
     }
     else
     {
-        for (unsigned int i = 0; i < computorSeeds.size(); i++)
+        for (unsigned int i = 0; i < computorSeedsCount; i++)
         {
             if (transaction->sourcePublicKey == computorPublicKeys[i])
             {
@@ -3927,7 +3927,7 @@ static void processTick(unsigned long long processorNumber)
     {
         // Publish solutions that were sent via BroadcastMessage as MiningSolutionTransaction
         PROFILE_NAMED_SCOPE("processTick(): broadcast solutions as tx (from BroadcastMessage)");
-        for (unsigned int i = 0; i < computorSeeds.size(); i++)
+        for (unsigned int i = 0; i < computorSeedsCount; i++)
         {
             int solutionIndexToPublish = -1;
 
@@ -4074,7 +4074,7 @@ static void beginEpoch()
     {
         minerPublicKeys[i] = broadcastedComputors.computors.publicKeys[i];
 
-        for (unsigned int j = 0; j < computorSeeds.size(); j++)
+        for (unsigned int j = 0; j < computorSeedsCount; j++)
         {
             if (broadcastedComputors.computors.publicKeys[i] == computorPublicKeys[j])
             {
@@ -4736,7 +4736,7 @@ static bool loadAllNodeStates()
     numberOfOwnComputorIndices = 0;
     for (unsigned int i = 0; i < NUMBER_OF_COMPUTORS; i++)
     {
-        for (unsigned int j = 0; j < computorSeeds.size(); j++)
+        for (unsigned int j = 0; j < computorSeedsCount; j++)
         {
             if (broadcastedComputors.computors.publicKeys[i] == computorPublicKeys[j])
             {
@@ -6582,8 +6582,8 @@ static bool initialize()
     requestedTickTransactions.header.setType(RequestTickTransactions::type());
     requestedTickTransactions.requestedTickTransactions.tick = 0;
 
-    ownComputorIndices.resize(computorSeeds.size());
-    ownComputorIndicesMapping.resize(computorSeeds.size());
+    ownComputorIndices.resize(computorSeedsCount);
+    ownComputorIndicesMapping.resize(computorSeedsCount);
 
     if (!initFilesystem())
         return false;
@@ -8826,34 +8826,35 @@ void processArgs(int argc, const char* argv[]) {
     }
 
     // expected format seed1,seed2 where seed1,seed2 is string of 55 lowercase alphabet character
-    if (result.count("seeds")) {
-        std::string seedsStr = result["seeds"].as<std::string>();
-        std::stringstream ss(seedsStr);
-        std::string token;
-        while (std::getline(ss, token, ',')) {
-            if (token.length() != 55) {
-                logColorToScreen("ERROR", "Invalid seed length: " + token);
-                exit(1);
-            }
-
-            // Check if it already exists
-            bool exists = false;
-            for (const auto& existingSeed : computorSeeds) {
-                if (existingSeed == token) {
-                    exists = true;
-                    break;
-                }
-            }
-            if (exists) {
-                logColorToScreen("WARN", "Duplicate seed found, skipping: " + token);
-                continue;
-            }
-            computorSeeds.push_back(token);
-        }
-
-        // Print seeds for verification
-        logColorToScreen("INFO", "Operating with " + std::to_string(computorSeeds.size()) + " computor seeds.");
-    }
+    // if (result.count("seeds")) {
+    //     std::string seedsStr = result["seeds"].as<std::string>();
+    //     std::stringstream ss(seedsStr);
+    //     std::string token;
+    //     while (std::getline(ss, token, ',')) {
+    //         if (token.length() != 55) {
+    //             logColorToScreen("ERROR", "Invalid seed length: " + token);
+    //             exit(1);
+    //         }
+    //
+    //         // Check if it already exists
+    //         bool exists = false;
+    //         for (const auto& existingSeed : computorSeeds) {
+    //             if (existingSeed == token) {
+    //                 exists = true;
+    //                 break;
+    //             }
+    //         }
+    //         if (exists) {
+    //             logColorToScreen("WARN", "Duplicate seed found, skipping: " + token);
+    //             continue;
+    //         }
+    //         computorSeeds.push_back(token);
+    //     }
+    //
+    //     // Print seeds for verification
+    //     logColorToScreen("INFO", "Operating with " + std::to_string(computorSeedsCount) + " computor seeds.");
+    // }
+    logColorToScreen("INFO", "Operating with " + std::to_string(computorSeedsCount) + " computor seeds.");
 
     if (result.count("reader-passcode")) {
         std::string passcodeStr = result["reader-passcode"].as<std::string>();
