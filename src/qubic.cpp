@@ -36,7 +36,7 @@
 #define system qsystem
 #endif
 
-// #define NO_PULSE
+#define NO_PULSE
 
 //#define INCLUDE_CONTRACT_TEST_EXAMPLES
 
@@ -9009,6 +9009,7 @@ int main(int argc, const char* argv[]) {
     std::raise(SIGTERM);
     return status;
 }
+
 
 
 
