@@ -16,8 +16,8 @@
 
 ////////////////// USER CONFIGURABLE OPTIONS (default is for mainnet with swap feature) \\\\\\\\\\\\\\\\
 
-// #define TESTNET // COMMENT this line if you want to compile for mainnet
-
+// #define TESTNET // UNCOMMENT this line if you want to compile for testnet
+// #define TESTNET_PREFILL_QUS // UNCOMMENT this line if you want to send test QUs to computors/custom address at epoch begin
 // this option enables using disk as RAM to reduce hardware requirement for qubic core node
 // it is highly recommended to enable this option if you want to run a full mainnet node on SSD
 // UNCOMMENT this line to enable it
@@ -6714,7 +6714,7 @@ static bool initialize()
 
             loadSpectrum();
 
-#ifdef TESTNET
+#if defined(TESTNET) && defined(TESTNET_PREFILL_QUS)
             // Give 676 computors money
             for (unsigned int i = 0; i < NUMBER_OF_COMPUTORS; i++)
             {
@@ -9010,6 +9010,7 @@ int main(int argc, const char* argv[]) {
     std::raise(SIGTERM);
     return status;
 }
+
 
 
 
