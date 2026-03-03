@@ -6734,7 +6734,9 @@ static bool initialize()
 
                 ASSERT(energy(::spectrumIndex(publicKey)) == 10'000'000'000);
             }
+#endif
 
+#if defined(TESTNET)
             constexpr bool canObmitLoadNodeState = true;
 #else
             constexpr bool canObmitLoadNodeState = false;
