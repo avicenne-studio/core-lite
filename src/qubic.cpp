@@ -36,6 +36,8 @@
 #define system qsystem
 #endif
 
+// #define OLD_QVAULT
+
 //#define INCLUDE_CONTRACT_TEST_EXAMPLES
 
 // contract_def.h needs to be included first to make sure that contracts have minimal access
@@ -1952,7 +1954,7 @@ static void processSpecialCommand(Peer* peer, RequestResponseHeader* header)
 
 static void processOracleMachineReply(Peer* peer, RequestResponseHeader* header)
 {
-    // Ignore message fron non oracle machine node
+    // Ignore message from non oracle machine node
     if (!peer->isOracleMachineNode())
     {
         return;
@@ -3579,6 +3581,9 @@ static void processTick(unsigned long long processorNumber)
         logToConsole(message);
     }
 
+    // Generate subscription queries (may create queries that immediately timout if the network was stuck)
+    oracleEngine.generateSubscriptionQueries();
+
     // Check for oracle query timeouts (may schedule notification)
     oracleEngine.processTimeouts();
 
@@ -4329,10 +4334,7 @@ static void endEpoch()
         {
             OracleRevenuePoints oracleRevPoints;
             oracleEngine.getRevenuePoints(oracleRevPoints);
-            for (unsigned int i = 0; i < NUMBER_OF_COMPUTORS; i++)
-            {
-                gEpochRevenueData.oracleScore[i] = oracleRevPoints.computorRevPoints[i];
-            }
+            copyMemory(gEpochRevenueData.oracleScore, oracleRevPoints.computorRevPoints);
         }
         computeRevenueV2(gEpochRevenueData);
 
@@ -6899,6 +6901,15 @@ static bool initialize()
             if (!loadContractExecFeeFiles() && (!canObmitLoadNodeState))
                 return false;
 #endif
+
+#ifdef INCLUDE_CONTRACT_TEST_EXAMPLES
+            // fill execution fee reserves for test contracts
+            setContractFeeReserve(TESTEXA_CONTRACT_INDEX, 100000000000);
+            setContractFeeReserve(TESTEXB_CONTRACT_INDEX, 100000000000);
+            setContractFeeReserve(TESTEXC_CONTRACT_INDEX, 100000000000);
+            setContractFeeReserve(TESTEXD_CONTRACT_INDEX, 100000000000);
+#endif
+
             m256i computerDigest;
             {
                 setText(message, L"Computer digest = ");

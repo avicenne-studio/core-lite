@@ -112,7 +112,11 @@
 #define CONTRACT_INDEX QVAULT_CONTRACT_INDEX
 #define CONTRACT_STATE_TYPE QVAULT
 #define CONTRACT_STATE2_TYPE QVAULT2
+#ifdef OLD_QVAULT
+#include "contracts/QVAULT_old.h"
+#else
 #include "contracts/QVAULT.h"
+#endif
 
 #undef CONTRACT_INDEX
 #undef CONTRACT_STATE_TYPE
@@ -257,8 +261,6 @@
 // new contracts should be added above this line
 
 #ifdef INCLUDE_CONTRACT_TEST_EXAMPLES
-// forward declaration, defined in qpi_spectrum_impl.h
-static void setContractFeeReserve(unsigned int contractIndex, long long newValue);
 
 constexpr unsigned short TESTEXA_CONTRACT_INDEX = (CONTRACT_INDEX + 1);
 #undef CONTRACT_INDEX
@@ -351,7 +353,7 @@ constexpr struct ContractDescription
     {"SWATCH", 123, 10000, sizeof(IPO)},
     {"CCF", 127, 10000, sizeof(CCF::StateData)}, // proposal in epoch 125, IPO in 126, construction and first use in 127
     {"QEARN", 137, 10000, sizeof(QEARN::StateData)}, // proposal in epoch 135, IPO in 136, construction in 137 / first donation after END_EPOCH, first round in epoch 138
-    {"QVAULT", 138, 10000, sizeof(IPO)}, // proposal in epoch 136, IPO in 137, construction and first use in 138
+    {"QVAULT", 138, 10000, sizeof(QVAULT::StateData)}, // proposal in epoch 136, IPO in 137, construction and first use in 138
     {"MSVAULT", 149, 10000, sizeof(MSVAULT::StateData)}, // proposal in epoch 147, IPO in 148, construction and first use in 149
     {"QBAY", 154, 10000, sizeof(QBAY::StateData)}, // proposal in epoch 152, IPO in 153, construction and first use in 154
     {"QSWAP", 171, 10000, sizeof(QSWAP::StateData)}, // proposal in epoch 169, IPO in 170, construction and first use in 171
@@ -492,12 +494,6 @@ static void initializeContracts()
     REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(TESTEXB);
     REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(TESTEXC);
     REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(TESTEXD);
-
-    // fill execution fee reserves for test contracts
-    setContractFeeReserve(TESTEXA_CONTRACT_INDEX, 100000000000);
-    setContractFeeReserve(TESTEXB_CONTRACT_INDEX, 100000000000);
-    setContractFeeReserve(TESTEXC_CONTRACT_INDEX, 100000000000);
-    setContractFeeReserve(TESTEXD_CONTRACT_INDEX, 100000000000);
 #endif
 }
 
