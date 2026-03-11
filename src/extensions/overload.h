@@ -61,7 +61,7 @@ std::string getQubicVersionString()
            std::to_string(VERSION_C);
 }
 
-Json::Value getCheckInData()
+Json::Value getCheckInData(const std::string& challenge = "")
 {
     static auto startTime = std::chrono::system_clock::now();
 
@@ -85,6 +85,11 @@ Json::Value getCheckInData()
                                        std::chrono::system_clock::now().time_since_epoch()).count();
         checkinData["uptime"] = std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::system_clock::now() - startTime).count();
+
+        if (!challenge.empty())
+        {
+            checkinData["challenge"] = challenge;
+        }
 
         uint8_t hash[32];
         auto checkinBytes = jsonToBytes(checkinData);

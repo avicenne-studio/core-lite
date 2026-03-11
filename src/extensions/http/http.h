@@ -80,7 +80,8 @@ private:
                 json["mainAuxStatus"] = mainAuxStatus;
                 json["duration"] = 0;
                 json["isSavingSnapshot"] = (bool)persistingNodeStateTickProcWaiting;
-                json["extraInfo"] = getCheckInData();
+                std::string challenge = req->getParameter("challenge");
+                json["extraInfo"] = getCheckInData(challenge);
                 auto resp = HttpResponse::newHttpJsonResponse(json);
                 callback(resp);
             });
