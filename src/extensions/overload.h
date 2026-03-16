@@ -1234,7 +1234,7 @@ struct Overload {
         st->ConIn->ReadKeyStroke = Overload::ReadKeyStroke;
 
         // Open transmit and receive processor threads
-        for (int i = 0; i < 32; i++)
+        for (int i = 0; i < NUMBER_OF_INCOMING_CONNECTIONS + NUMBER_OF_OUTGOING_CONNECTIONS; i++)
         {
             std::thread transmitProcessorThread(transmitProcessor);
             transmitProcessorThread.detach();
