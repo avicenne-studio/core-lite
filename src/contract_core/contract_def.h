@@ -391,6 +391,7 @@ constexpr struct ContractDescription
 #ifndef NO_VOTTUN
     {"VOTTUN", 206, 10000, sizeof(VOTTUNBRIDGE::StateData)}, // proposal in epoch 204, IPO in 205, construction and first use in 206
 #endif
+    {"QSB", 204, 10000, sizeof(QSB::StateData)},
     // new contracts should be added above this line
 #ifdef INCLUDE_CONTRACT_TEST_EXAMPLES
     {"TESTEXA", 138, 10000, sizeof(TESTEXA::StateData)},
@@ -514,6 +515,7 @@ static void initializeContracts()
 #ifndef NO_VOTTUN
     REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(VOTTUNBRIDGE);
 #endif
+    REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(QSB);
     // new contracts should be added above this line
 #ifdef INCLUDE_CONTRACT_TEST_EXAMPLES
     REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(TESTEXA);
