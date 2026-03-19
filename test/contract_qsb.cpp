@@ -100,26 +100,40 @@ public:
         return (const StateCheckerQSB*)contractStates[QSB_CONTRACT_INDEX];
     }
 
-    // Helper to create a valid order for unlock testing
-    QSB::Order createTestOrder(
+    static QSB::Order createTestOrder(
         const id& fromAddress,
         const id& toAddress,
         uint64 amount,
         uint64 relayerFee,
-        uint32 nonce) const
+        const Array<uint8, 32>& nonce32)
     {
         QSB::Order order;
         order.fromAddress = fromAddress;
         order.toAddress = toAddress;
-        order.tokenIn = 0;
-        order.tokenOut = 0;
+        setMemory(order.tokenIn, 0);
+        setMemory(order.tokenOut, 0);
         order.amount = amount;
         order.relayerFee = relayerFee;
-        order.destinationChainId = 1; // Solana
-        order.networkIn = 0; // Qubic
-        order.networkOut = 1; // Solana
-        order.nonce = nonce;
+        order.networkIn = 2;
+        order.networkOut = 1;
+        order.nonce = nonce32;
         return order;
+    }
+
+    static QSB::Order createTestOrderFromU32Nonce(
+        const id& fromAddress,
+        const id& toAddress,
+        uint64 amount,
+        uint64 relayerFee,
+        uint32 nonce)
+    {
+        Array<uint8, 32> nonce32;
+        setMemory(nonce32, 0);
+        nonce32.set(0, (uint8)(nonce & 0xFF));
+        nonce32.set(1, (uint8)((nonce >> 8) & 0xFF));
+        nonce32.set(2, (uint8)((nonce >> 16) & 0xFF));
+        nonce32.set(3, (uint8)((nonce >> 24) & 0xFF));
+        return createTestOrder(fromAddress, toAddress, amount, relayerFee, nonce32);
     }
 
     // Helper to create signature data (mock - in real tests would need actual signatures)
@@ -518,7 +532,7 @@ TEST(ContractTestingQSB, TestComputeOrderHash_ReturnsConsistentHash)
 {
     ContractTestingQSB test;
 
-    QSB::Order order = test.createTestOrder(USER1, USER2, 1000000, 10000, 99);
+    QSB::Order order = ContractTestingQSB::createTestOrderFromU32Nonce(USER1, USER2, 1000000, 10000, 99);
     QSB::ComputeOrderHash_output out = test.computeOrderHash(order);
 
     // Hash should be non-zero
@@ -551,13 +565,20 @@ TEST(ContractTestingQSB, TestComputeOrderHash_MatchesLockOutput)
     QSB::Lock_output lockOut = test.lock(USER1, amount, relayerFee, 1, nonce, ContractTestingQSB::createZeroAddress(), amount);
     EXPECT_TRUE(lockOut.success);
 
-    // Create order matching what Lock hashes (fromAddress=invocator, toAddress=NULL_ID, amount, relayerFee, networkOut, nonce)
-    QSB::Order order = test.createTestOrder(USER1, NULL_ID, amount, relayerFee, nonce);
-    order.networkIn = 0;
+    QSB::Order order;
+    order.fromAddress = USER1;
+    order.toAddress = NULL_ID;
+    setMemory(order.tokenIn, 0);
+    setMemory(order.tokenOut, 0);
+    order.amount = amount;
+    order.relayerFee = relayerFee;
+    order.networkIn = 1;
     order.networkOut = 1;
-    order.destinationChainId = 1;
-    order.tokenIn = 0;
-    order.tokenOut = 0;
+    setMemory(order.nonce, 0);
+    order.nonce.set(0, (uint8)(nonce & 0xFF));
+    order.nonce.set(1, (uint8)((nonce >> 8) & 0xFF));
+    order.nonce.set(2, (uint8)((nonce >> 16) & 0xFF));
+    order.nonce.set(3, (uint8)((nonce >> 24) & 0xFF));
 
     QSB::ComputeOrderHash_output computed = test.computeOrderHash(order);
     for (uint32 i = 0; i < lockOut.orderHash.capacity(); ++i)
@@ -1150,16 +1171,21 @@ TEST(ContractTestingQSB, TestEditFeeParameters_RejectsTooHighProtocolFee)
 TEST(ContractTestingQSB, TestUnlock_FailsWhenNoOracles)
 {
     ContractTestingQSB test;
-    
-    // Bootstrap admin
-    increaseEnergy(ADMIN, 1);
-    
-    QSB::Order order = test.createTestOrder(USER1, USER2, 1000000, 10000, 100);
+
+    const uint64 contractFund = 2000000;
+    increaseEnergy(USER1, contractFund);
+    test.lock(USER1, contractFund, 0, 1, 1, ContractTestingQSB::createZeroAddress(), contractFund);
+
+    Array<uint8, 32> nonce32;
+    setMemory(nonce32, 0);
+    nonce32.set(0, 100);
+    QSB::Order order = ContractTestingQSB::createTestOrder(USER1, USER2, 1000000, 10000, nonce32);
+
     Array<QSB::SignatureData, QSB_MAX_ORACLES> signatures;
     setMemory(signatures, 0);
-    
+
     QSB::Unlock_output output = test.unlock(USER1, order, 0, signatures);
-    EXPECT_FALSE(output.success); // Should fail - no oracles configured
+    EXPECT_FALSE(output.success);
 }
 
 TEST(ContractTestingQSB, TestUnlock_FailsWhenPaused)
@@ -1171,7 +1197,7 @@ TEST(ContractTestingQSB, TestUnlock_FailsWhenPaused)
     test.addRole(ADMIN, (uint8)QSB::Role::Oracle, ORACLE1);
     test.pause(ADMIN);
     
-    QSB::Order order = test.createTestOrder(USER1, USER2, 1000000, 10000, 101);
+    QSB::Order order = ContractTestingQSB::createTestOrderFromU32Nonce(USER1, USER2, 1000000, 10000, 101);
     Array<QSB::SignatureData, QSB_MAX_ORACLES> signatures;
     setMemory(signatures, 0);
     signatures.set(0, test.createMockSignature(ORACLE1));
@@ -1188,7 +1214,7 @@ TEST(ContractTestingQSB, TestUnlock_FailsWhenContractBalanceTooLow)
     increaseEnergy(USER2, 1);
     increaseEnergy(ORACLE1, 1);
     // No prior locks or deposits -> contract balance should be zero
-    QSB::Order order = test.createTestOrder(USER1, USER2, 1000000, 10000, 102);
+    QSB::Order order = ContractTestingQSB::createTestOrderFromU32Nonce(USER1, USER2, 1000000, 10000, 102);
     Array<QSB::SignatureData, QSB_MAX_ORACLES> signatures;
     setMemory(signatures, 0);
     signatures.set(0, test.createMockSignature(ORACLE1));
@@ -1210,7 +1236,7 @@ TEST(ContractTestingQSB, TestUnlock_FailsWhenOrderAlreadyFilledBeforeOracleCheck
     // Prepare an unlock order and compute its hash
     const uint64 amount = 100000;
     const uint64 relayerFee = 1000;
-    QSB::Order order = test.createTestOrder(USER1, USER2, amount, relayerFee, 600);
+    QSB::Order order = ContractTestingQSB::createTestOrderFromU32Nonce(USER1, USER2, amount, relayerFee, 600);
     QSB::ComputeOrderHash_output hashOut = test.computeOrderHash(order);
 
     // Mark this order hash as already filled via the state helper
@@ -1221,6 +1247,27 @@ TEST(ContractTestingQSB, TestUnlock_FailsWhenOrderAlreadyFilledBeforeOracleCheck
     Array<QSB::SignatureData, QSB_MAX_ORACLES> signatures;
     setMemory(signatures, 0);
     QSB::Unlock_output output = test.unlock(USER1, order, 0, signatures);
+    EXPECT_FALSE(output.success);
+}
+
+TEST(ContractTestingQSB, TestUnlock_DoesNotRequireMatchingLock)
+{
+    ContractTestingQSB test;
+
+    const uint64 contractFund = 2000000;
+    increaseEnergy(USER1, contractFund);
+    QSB::Lock_output lockOut = test.lock(USER1, contractFund, 0, 1, 1, ContractTestingQSB::createZeroAddress(), contractFund);
+    EXPECT_TRUE(lockOut.success);
+
+    Array<uint8, 32> nonce32;
+    setMemory(nonce32, 0);
+    nonce32.set(0, 0xAB);
+    nonce32.set(1, 0xCD);
+    QSB::Order order = ContractTestingQSB::createTestOrder(USER2, USER2, 500000, 5000, nonce32);
+
+    Array<QSB::SignatureData, QSB_MAX_ORACLES> signatures;
+    setMemory(signatures, 0);
+    QSB::Unlock_output output = test.unlock(USER2, order, 0, signatures);
     EXPECT_FALSE(output.success);
 }
 
