@@ -10,6 +10,29 @@ static constexpr uint32 QSB_MAX_FILLED_ORDERS = 2048;
 static constexpr uint32 QSB_MAX_LOCKED_ORDERS = 1024;
 static constexpr uint32 QSB_MAX_BPS_FEE = 1000;      // max 10% fee (1000 / 10000)
 static constexpr uint32 QSB_MAX_PROTOCOL_FEE = 100;  // max 100% of bps fee
+
+// Serialized order message: domain prefix (52 bytes) + order fields (184 bytes) = 236 bytes.
+// Layout matches the oracle's serializeBridgeOrder format exactly.
+#pragma pack(push, 1)
+struct QSBOrderMessage
+{
+	uint32 protocolNameLen;         // 0: always 11
+	uint8 protocolName[11];         // 4: "QubicBridge"
+	uint32 protocolVersionLen;      // 15: always 1
+	uint8 protocolVersion[1];       // 19: "1"
+	uint8 contractAddress[32];      // 20: destination contract address (QSB index LE-padded)
+	uint32 networkIn;               // 52
+	uint32 networkOut;              // 56
+	uint8 tokenIn[32];              // 60
+	uint8 tokenOut[32];             // 92
+	uint8 fromAddress[32];          // 124
+	uint8 toAddress[32];            // 156
+	uint64 amount;                  // 188
+	uint64 relayerFee;              // 196
+	uint8 nonce[32];                // 204
+};
+#pragma pack(pop)
+static_assert(sizeof(QSBOrderMessage) == 236, "OrderMessage must be exactly 236 bytes");
 static constexpr uint32 QSB_QUERY_MAX_PAGE_SIZE = 64; // max entries per paginated query
 
 // Log types for QSB contract (no enums allowed in contracts)
@@ -23,7 +46,6 @@ static const uint32 QSBLogThresholdUpdated = 7;
 static const uint32 QSBLogRoleGranted = 8;
 static const uint32 QSBLogRoleRevoked = 9;
 static const uint32 QSBLogFeeParametersUpdated = 10;
-static const uint32 QSBLogCancelLock = 11;
 
 // Generic reason codes for logging
 static const uint8 QSBReasonNone = 0;
@@ -66,19 +88,17 @@ public:
 	// Core data structures
 	// ---------------------------------------------------------------------
 
-	// Order object used for unlock()
 	struct Order
 	{
-		id fromAddress;              // sender on source chain (mirrored id)
-		id toAddress;                // Qubic recipient when minting/unlocking
-		uint64 tokenIn;              // identifier for incoming asset
-		uint64 tokenOut;             // identifier for outgoing asset
-		uint64 amount;               // total bridged amount (Qubic units)
-		uint64 relayerFee;           // fee paid to relayer (subset of amount)
-		uint32 destinationChainId;   // e.g. Solana chain-id as used off-chain
-		uint32 networkIn;            // incoming network id
-		uint32 networkOut;           // outgoing network id
-		uint32 nonce;                // unique order nonce
+		id fromAddress;
+		id toAddress;
+		Array<uint8, 32> tokenIn;
+		Array<uint8, 32> tokenOut;
+		uint64 amount;
+		uint64 relayerFee;
+		uint32 networkIn;
+		uint32 networkOut;
+		Array<uint8, 32> nonce;
 	};
 
 	// Compact order-hash representation (K12 digest)
@@ -505,6 +525,40 @@ protected:
 		outHash.setMem(digest);
 	}
 
+	inline static void initDomainPrefix(QSBOrderMessage& msg)
+	{
+		setMemory(msg, 0);
+		msg.protocolNameLen = 11;
+		msg.protocolName[0]='Q'; msg.protocolName[1]='u'; msg.protocolName[2]='b';
+		msg.protocolName[3]='i'; msg.protocolName[4]='c'; msg.protocolName[5]='B';
+		msg.protocolName[6]='r'; msg.protocolName[7]='i'; msg.protocolName[8]='d';
+		msg.protocolName[9]='g'; msg.protocolName[10]='e';
+		msg.protocolVersionLen = 1;
+		msg.protocolVersion[0] = '1';
+		msg.contractAddress[0] = (uint8)(CONTRACT_INDEX & 0xFF);
+		msg.contractAddress[1] = (uint8)((CONTRACT_INDEX >> 8) & 0xFF);
+	}
+
+	inline static void buildOrderMessage(
+		QSBOrderMessage& msg,
+		const Order& order,
+		OrderHash& tmpIdBytes,
+		uint32 i)
+	{
+		initDomainPrefix(msg);
+		msg.networkIn = order.networkIn;
+		msg.networkOut = order.networkOut;
+		for (i = 0; i < 32; ++i) msg.tokenIn[i] = order.tokenIn.get(i);
+		for (i = 0; i < 32; ++i) msg.tokenOut[i] = order.tokenOut.get(i);
+		tmpIdBytes.setMem(order.fromAddress);
+		for (i = 0; i < 32; ++i) msg.fromAddress[i] = tmpIdBytes.get(i);
+		tmpIdBytes.setMem(order.toAddress);
+		for (i = 0; i < 32; ++i) msg.toAddress[i] = tmpIdBytes.get(i);
+		msg.amount = order.amount;
+		msg.relayerFee = order.relayerFee;
+		for (i = 0; i < 32; ++i) msg.nonce[i] = order.nonce.get(i);
+	}
+
 	// Check if caller is current admin (or if admin is not yet set, allow bootstrap)
 	inline static bool isAdmin(const QPI::ContractState<StateData, CONTRACT_INDEX>& state, const id& who)
 	{
@@ -642,6 +696,8 @@ public:
 		LockedOrderEntry existing;
 		Order tmpOrder;
 		LockedOrderEntry entry;
+		QSBOrderMessage msgBuffer;
+		OrderHash tmpIdBytes;
 		uint32 i;
 		QSBLogLockMessage logMsg;
 	};
@@ -719,19 +775,22 @@ public:
 			return;
 		}
 
-		// Construct a lightweight order object for hashing and event usage
-		locals.tmpOrder.destinationChainId = input.networkOut;
-		locals.tmpOrder.networkIn = 0; // Qubic network id (can be refined off-chain)
+		locals.tmpOrder.networkIn = 1;
 		locals.tmpOrder.networkOut = input.networkOut;
-		locals.tmpOrder.tokenIn = 0;
-		locals.tmpOrder.tokenOut = 0;
+		setMemory(locals.tmpOrder.tokenIn, 0);
+		setMemory(locals.tmpOrder.tokenOut, 0);
 		locals.tmpOrder.fromAddress = qpi.invocator();
-		locals.tmpOrder.toAddress = NULL_ID; // Off-chain destination encoded only in toAddress bytes
+		locals.tmpOrder.toAddress = NULL_ID;
 		locals.tmpOrder.amount = input.amount;
 		locals.tmpOrder.relayerFee = input.relayerFee;
-		locals.tmpOrder.nonce = input.nonce;
+		setMemory(locals.tmpOrder.nonce, 0);
+		locals.tmpOrder.nonce.set(0, (uint8)(input.nonce & 0xFF));
+		locals.tmpOrder.nonce.set(1, (uint8)((input.nonce >> 8) & 0xFF));
+		locals.tmpOrder.nonce.set(2, (uint8)((input.nonce >> 16) & 0xFF));
+		locals.tmpOrder.nonce.set(3, (uint8)((input.nonce >> 24) & 0xFF));
 
-		locals.digest = qpi.K12(locals.tmpOrder);
+		buildOrderMessage(locals.msgBuffer, locals.tmpOrder, locals.tmpIdBytes, locals.i);
+		locals.digest = qpi.K12(locals.msgBuffer);
 		digestToOrderHash(locals.digest, output.orderHash);
 		locals.logMsg.orderHash = output.orderHash;
 
@@ -761,7 +820,10 @@ public:
 		LockedOrderEntry entry;
 		Order tmpOrder;
 		id digest;
+		QSBOrderMessage msgBuffer;
+		OrderHash tmpIdBytes;
 		sint64 idx;
+		uint32 i;
 		QSBLogOverrideLockMessage logMsg;
 	};
 
@@ -827,20 +889,23 @@ public:
 		copyMemory(locals.entry.toAddress, input.toAddress);
 		locals.entry.relayerFee = input.relayerFee;
 
-		// Rebuild order for hashing
-		locals.tmpOrder.destinationChainId = locals.entry.networkOut;
-		locals.tmpOrder.networkIn = 0;
+		locals.tmpOrder.networkIn = 1;
 		locals.tmpOrder.networkOut = locals.entry.networkOut;
-		locals.tmpOrder.tokenIn = 0;
-		locals.tmpOrder.tokenOut = 0;
+		setMemory(locals.tmpOrder.tokenIn, 0);
+		setMemory(locals.tmpOrder.tokenOut, 0);
 		locals.tmpOrder.fromAddress = locals.entry.sender;
 		locals.tmpOrder.toAddress = NULL_ID;
 		locals.tmpOrder.amount = locals.entry.amount;
 		locals.tmpOrder.relayerFee = locals.entry.relayerFee;
-		locals.tmpOrder.nonce = locals.entry.nonce;
+		setMemory(locals.tmpOrder.nonce, 0);
+		locals.tmpOrder.nonce.set(0, (uint8)(locals.entry.nonce & 0xFF));
+		locals.tmpOrder.nonce.set(1, (uint8)((locals.entry.nonce >> 8) & 0xFF));
+		locals.tmpOrder.nonce.set(2, (uint8)((locals.entry.nonce >> 16) & 0xFF));
+		locals.tmpOrder.nonce.set(3, (uint8)((locals.entry.nonce >> 24) & 0xFF));
 
-		locals.digest = qpi.K12(locals.tmpOrder);
-		digestToOrderHash(locals.digest, locals.entry.orderHash);;
+		buildOrderMessage(locals.msgBuffer, locals.tmpOrder, locals.tmpIdBytes, locals.i);
+		locals.digest = qpi.K12(locals.msgBuffer);
+		digestToOrderHash(locals.digest, locals.entry.orderHash);
 		output.orderHash = locals.entry.orderHash;
 		locals.logMsg.orderHash = locals.entry.orderHash;
 
@@ -908,11 +973,15 @@ public:
 	struct ComputeOrderHash_locals
 	{
 		id digest;
+		QSBOrderMessage msgBuffer;
+		OrderHash tmpIdBytes;
+		uint32 i;
 	};
 
 	PUBLIC_FUNCTION_WITH_LOCALS(ComputeOrderHash)
 	{
-		locals.digest = qpi.K12(input.order);
+		buildOrderMessage(locals.msgBuffer, input.order, locals.tmpIdBytes, locals.i);
+		locals.digest = qpi.K12(locals.msgBuffer);
 		output.hash.setMem(locals.digest);
 	}
 
@@ -1032,6 +1101,8 @@ public:
 	{
 		id digest;
 		OrderHash hash;
+		QSBOrderMessage msgBuffer;
+		OrderHash tmpIdBytes;
 		uint32 validSignatureCount;
 		uint32 requiredSignatures;
 		FilledOrderEntry entry;
@@ -1123,8 +1194,9 @@ public:
 		// minted tokens can be freely transferred and aggregated, and where
 		// individual locks are not tied 1:1 to specific unlocks.
 
-		// Compute digest and orderHash
-		locals.digest = qpi.K12(input.order);
+		// Serialize order with domain prefix and compute K12 digest
+		buildOrderMessage(locals.msgBuffer, input.order, locals.tmpIdBytes, locals.i);
+		locals.digest = qpi.K12(locals.msgBuffer);
 		digestToOrderHash(locals.digest, locals.hash);
 		output.orderHash = locals.hash;
 		locals.logMsg.orderHash = locals.hash;
