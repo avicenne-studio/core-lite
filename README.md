@@ -176,6 +176,51 @@ Qubic Core Lite provides a built-in RPC API that enables developers to interact 
 https://qubic.github.io/integration/Partners/swagger/qubic-rpc-doc.html?urls.primaryName=Qubic%20RPC%20Live%20Tree  
 > Remember to select the appropriate API definition for each endpoint.
 
+## Local Testnet Indexer
+
+A lightweight indexer sidecar runs alongside the node when using the Docker testnet setup. It captures full transaction data at broadcast time and persists it to SQLite, working around the node's small in-memory transaction buffer.
+
+**Base URL:** `http://<indexer-host>:<port>` (default port: `3001`)
+
+> **Always broadcast transactions through the indexer** instead of hitting the node directly. The node's circular buffer evicts transaction data within seconds; the indexer captures it permanently.
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/status` | Last indexed tick, total ticks/txs |
+| `GET` | `/tick/:n` | Tick data + transactions for tick `n` |
+| `GET` | `/tx/:hash` | Single transaction by hash |
+| `GET` | `/identity/:id/transactions` | Txs for an identity — query params: `limit` (max 200, default 50), `offset` (default 0) |
+| `GET` | `/ticks/latest` | Most recent ticks — query param: `limit` (max 100, default 20) |
+| `POST` | `/broadcast-transaction` | Captures tx data and forwards to node — body: `{ "encodedTransaction": "<base64>" }` |
+
+### Examples
+
+```bash
+INDEXER=http://<indexer-host>:3001
+
+# Check indexer status
+curl $INDEXER/status
+
+# Get tick data
+curl $INDEXER/tick/46310050
+
+# Get transaction by hash
+curl $INDEXER/tx/abcdef1234...
+
+# Get transactions for an identity (paginated)
+curl "$INDEXER/identity/ABCDEFGHIJ.../transactions?limit=20&offset=0"
+
+# Get latest 10 ticks
+curl "$INDEXER/ticks/latest?limit=10"
+
+# Broadcast a transaction
+curl $INDEXER/broadcast-transaction \
+  -H 'Content-Type: application/json' \
+  -d '{"encodedTransaction": "<base64-encoded-tx>"}'
+```
+
 ## Tips
 
 - **For Local Testnet:** Default `PORT` is **31841**, you can change it in `qubic.cpp`
