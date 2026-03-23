@@ -1,0 +1,13 @@
+{
+  "name": "qubic-testnet-indexer",
+  "version": "1.0.0",
+  "description": "Lightweight tick/transaction indexer for Qubic local testnet",
+  "main": "indexer.js",
+  "scripts": {
+    "start": "node indexer.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.6.0",
+    "express": "^4.19.2"
+  }
+}
