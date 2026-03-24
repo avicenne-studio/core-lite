@@ -1469,7 +1469,7 @@ TEST(ContractTestingQSB, TestUnlock_FailsWhenEraMismatch)
     EXPECT_FALSE(unlockOutput.success);
 }
 
-TEST(ContractTestingQSB, TestUnlock_SucceedsWithPreviousEra)
+TEST(ContractTestingQSB, TestUnlock_FailsWhenEraIsTooOld)
 {
     ContractTestingQSB test;
     increaseEnergy(ADMIN, 1);
@@ -1494,13 +1494,7 @@ TEST(ContractTestingQSB, TestUnlock_SucceedsWithPreviousEra)
     }
     EXPECT_EQ(test.getState()->orderEra, 3u);
 
-    // An order with era=2 (previous era) should pass the era check.
-    // Note: it will still fail at signature verification since we use mock signatures,
-    // but it should NOT fail with QSBReasonEraMismatch.
-    // We can verify this by checking the order passes the era gate.
-    // The simplest way is to check that era=1 fails (too old) differently.
-
-    // era=1 is too old (current=3, grace allows 2)
+    // era=1 is rejected (current=3, only era=3 accepted — no grace period)
     QSB::Order orderOld = ContractTestingQSB::createTestOrderFromU32Nonce(USER1, USER2, 100, 10, 99, 1);
     // Fund contract
     increaseEnergy(USER1, 100);
@@ -1511,5 +1505,5 @@ TEST(ContractTestingQSB, TestUnlock_SucceedsWithPreviousEra)
     sigs.set(0, test.createMockSignature(ORACLE1));
 
     QSB::Unlock_output unlockOld = test.unlock(USER1, orderOld, 1, sigs);
-    EXPECT_FALSE(unlockOld.success); // fails due to era mismatch (era=1, need 2 or 3)
+    EXPECT_FALSE(unlockOld.success); // fails due to era mismatch
 }

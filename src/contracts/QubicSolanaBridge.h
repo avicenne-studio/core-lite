@@ -155,9 +155,9 @@ public:
 		uint32 networkOut;
 		uint32 nonce;
 		OrderHash orderHash;
-		uint32 orderEra;
 		uint8 success;
 		uint8 reasonCode;
+		uint32 orderEra;
 		sint8 _terminator;
 	};
 
@@ -172,9 +172,9 @@ public:
 		uint32 networkOut;
 		uint32 nonce;
 		OrderHash orderHash;
-		uint32 orderEra;
 		uint8 success;
 		uint8 reasonCode;
+		uint32 orderEra;
 		sint8 _terminator;
 	};
 
@@ -187,9 +187,9 @@ public:
 		uint64 amount;
 		uint64 relayerFee;
 		id relayer;
-		uint32 orderEra;
 		uint8 success;
 		uint8 reasonCode;
+		uint32 orderEra;
 		sint8 _terminator;
 	};
 
@@ -1207,10 +1207,9 @@ public:
 			return;
 		}
 
-		// Era validation: reject orders whose era does not match current or previous era (grace period of 1).
+		// Era validation: reject orders whose era does not match the current era.
 		// This prevents replay attacks after the filledOrders ring buffer wraps.
-		if (input.order.orderEra != state.get().orderEra &&
-			(state.get().orderEra == 0 || input.order.orderEra != state.get().orderEra - 1))
+		if (input.order.orderEra != state.get().orderEra)
 		{
 			locals.logMsg.reasonCode = QSBReasonEraMismatch;
 			LOG_INFO(locals.logMsg);
