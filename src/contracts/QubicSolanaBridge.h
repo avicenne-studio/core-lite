@@ -11,7 +11,7 @@ static constexpr uint32 QSB_MAX_LOCKED_ORDERS = 1024;
 static constexpr uint32 QSB_MAX_BPS_FEE = 1000;      // max 10% fee (1000 / 10000)
 static constexpr uint32 QSB_MAX_PROTOCOL_FEE = 100;  // max 100% of bps fee
 
-// Serialized order message: domain prefix (52 bytes) + order fields (184 bytes) = 236 bytes.
+// Serialized order message: domain prefix (52 bytes) + order fields (188 bytes) = 240 bytes.
 // Layout matches the oracle's serializeBridgeOrder format exactly.
 #pragma pack(push, 1)
 struct QSBOrderMessage
@@ -30,9 +30,10 @@ struct QSBOrderMessage
 	uint64 amount;                  // 188
 	uint64 relayerFee;              // 196
 	uint8 nonce[32];                // 204
+	uint32 orderEra;                // 236
 };
 #pragma pack(pop)
-static_assert(sizeof(QSBOrderMessage) == 236, "OrderMessage must be exactly 236 bytes");
+static_assert(sizeof(QSBOrderMessage) == 240, "OrderMessage must be exactly 240 bytes");
 static constexpr uint32 QSB_QUERY_MAX_PAGE_SIZE = 64; // max entries per paginated query
 
 // Log types for QSB contract (no enums allowed in contracts)
@@ -68,7 +69,8 @@ static const uint8 QSBReasonRoleExists = 16;
 static const uint8 QSBReasonRoleMissing = 17;
 static const uint8 QSBReasonInvalidFeeParams = 18;
 static const uint8 QSBReasonTransferFailed = 19;
-// 20, 21 reserved for future use
+static const uint8 QSBReasonEraMismatch = 20;
+// 21 reserved for future use
 
 struct QSB2
 {
@@ -99,6 +101,7 @@ public:
 		uint32 networkIn;
 		uint32 networkOut;
 		Array<uint8, 32> nonce;
+		uint32 orderEra;
 	};
 
 	// Compact order-hash representation (K12 digest)
@@ -136,6 +139,7 @@ public:
 		Array<uint8, 64> toAddress;
 		OrderHash orderHash;
 		uint32 lockEpoch;
+		uint32 orderEra;
 		bit active;
 	};
 
@@ -153,6 +157,7 @@ public:
 		OrderHash orderHash;
 		uint8 success;
 		uint8 reasonCode;
+		uint32 orderEra;
 		sint8 _terminator;
 	};
 
@@ -169,6 +174,7 @@ public:
 		OrderHash orderHash;
 		uint8 success;
 		uint8 reasonCode;
+		uint32 orderEra;
 		sint8 _terminator;
 	};
 
@@ -183,6 +189,7 @@ public:
 		id relayer;
 		uint8 success;
 		uint8 reasonCode;
+		uint32 orderEra;
 		sint8 _terminator;
 	};
 
@@ -385,6 +392,7 @@ public:
 		uint32 pauserCount;
 		uint8 oracleThreshold;
 		bit paused;
+		uint32 orderEra;
 	};
 
 	struct IsOracle_input
@@ -509,6 +517,7 @@ public:
 		uint32 protocolFee;          // percent of BPS fee sent to protocol (base 100)
 		uint8 oracleThreshold; // percent [1..100]
 		bit paused;
+		uint32 orderEra;
 	};
 
 protected:
@@ -557,6 +566,7 @@ protected:
 		msg.amount = order.amount;
 		msg.relayerFee = order.relayerFee;
 		for (i = 0; i < 32; ++i) msg.nonce[i] = order.nonce.get(i);
+		msg.orderEra = order.orderEra;
 	}
 
 	// Check if caller is current admin (or if admin is not yet set, allow bootstrap)
@@ -608,6 +618,7 @@ protected:
 	{
 		entry.active = false;
 		entry.lockEpoch = 0;
+		entry.orderEra = 0;
 		entry.sender = 0;
 		entry.networkOut = 0;
 		entry.amount = 0;
@@ -646,8 +657,12 @@ protected:
 		entry.hash = hash;
 		entry.used = true;
 		state.mut().filledOrders.set(i, entry);
-		state.mut().lastFilledOrdersNextOverwriteIdx =
-			(state.get().lastFilledOrdersNextOverwriteIdx + 1) & (QSB_MAX_FILLED_ORDERS - 1);
+		j = (state.get().lastFilledOrdersNextOverwriteIdx + 1) & (QSB_MAX_FILLED_ORDERS - 1);
+		state.mut().lastFilledOrdersNextOverwriteIdx = j;
+		if (j == 0)
+		{
+			state.mut().orderEra = state.get().orderEra + 1;
+		}
 	}
 
 	// Check whether an orderHash has already been filled
@@ -788,11 +803,13 @@ public:
 		locals.tmpOrder.nonce.set(1, (uint8)((input.nonce >> 8) & 0xFF));
 		locals.tmpOrder.nonce.set(2, (uint8)((input.nonce >> 16) & 0xFF));
 		locals.tmpOrder.nonce.set(3, (uint8)((input.nonce >> 24) & 0xFF));
+		locals.tmpOrder.orderEra = state.get().orderEra;
 
 		buildOrderMessage(locals.msgBuffer, locals.tmpOrder, locals.tmpIdBytes, locals.i);
 		locals.digest = qpi.K12(locals.msgBuffer);
 		digestToOrderHash(locals.digest, output.orderHash);
 		locals.logMsg.orderHash = output.orderHash;
+		locals.logMsg.orderEra = state.get().orderEra;
 
 		// Persist locked order so that overrideLock or off-chain tooling can reference it.
 		locals.entry.active = true;
@@ -804,6 +821,7 @@ public:
 		copyMemory(locals.entry.toAddress, input.toAddress);
 		locals.entry.orderHash = output.orderHash;
 		locals.entry.lockEpoch = qpi.epoch();
+		locals.entry.orderEra = state.get().orderEra;
 		state.mut().lockedOrders.set(state.get().lastLockedOrdersNextOverwriteIdx, locals.entry);
 
 		// always overwrite the next slot, wrapping around with a power-of-two mask.
@@ -902,12 +920,14 @@ public:
 		locals.tmpOrder.nonce.set(1, (uint8)((locals.entry.nonce >> 8) & 0xFF));
 		locals.tmpOrder.nonce.set(2, (uint8)((locals.entry.nonce >> 16) & 0xFF));
 		locals.tmpOrder.nonce.set(3, (uint8)((locals.entry.nonce >> 24) & 0xFF));
+		locals.tmpOrder.orderEra = locals.entry.orderEra;  // preserve original era
 
 		buildOrderMessage(locals.msgBuffer, locals.tmpOrder, locals.tmpIdBytes, locals.i);
 		locals.digest = qpi.K12(locals.msgBuffer);
 		digestToOrderHash(locals.digest, locals.entry.orderHash);
 		output.orderHash = locals.entry.orderHash;
 		locals.logMsg.orderHash = locals.entry.orderHash;
+		locals.logMsg.orderEra = locals.entry.orderEra;
 
 		state.mut().lockedOrders.set((uint32)locals.idx, locals.entry);
 		output.success = true;
@@ -932,6 +952,7 @@ public:
 		output.pauserCount = state.get().pauserCount;
 		output.oracleThreshold = state.get().oracleThreshold;
 		output.paused = state.get().paused;
+		output.orderEra = state.get().orderEra;
 	}
 
 	PUBLIC_FUNCTION(IsOracle)
@@ -1134,6 +1155,7 @@ public:
 		locals.logMsg.amount = input.order.amount;
 		locals.logMsg.relayerFee = input.order.relayerFee;
 		locals.logMsg.relayer = qpi.invocator();
+		locals.logMsg.orderEra = input.order.orderEra;
 		locals.logMsg.success = 0;
 		locals.logMsg.reasonCode = QSBReasonNone;
 		locals.logMsg._terminator = 0;
@@ -1181,6 +1203,15 @@ public:
 		if (locals.contractBalance < input.order.amount)
 		{
 			locals.logMsg.reasonCode = QSBReasonInsufficientReward;
+			LOG_INFO(locals.logMsg);
+			return;
+		}
+
+		// Era validation: reject orders whose era does not match the current era.
+		// This prevents replay attacks after the filledOrders ring buffer wraps.
+		if (input.order.orderEra != state.get().orderEra)
+		{
+			locals.logMsg.reasonCode = QSBReasonEraMismatch;
 			LOG_INFO(locals.logMsg);
 			return;
 		}
@@ -1914,5 +1945,7 @@ public:
 		state.mut().protocolFee = 0;
 		state.mut().protocolFeeRecipient = NULL_ID;
 		state.mut().oracleFeeRecipient = NULL_ID;
+
+		state.mut().orderEra = 0;
 	}
 };
