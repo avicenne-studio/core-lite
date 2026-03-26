@@ -42,3 +42,7 @@ snapshotOracleSubscriptions.*
 snapshotOracleSubscribers.*
 snapshotTxStatusData
 snapshotConfirmedTx
+
+# Testnet scripts — Node.js runtime artifacts
+/tools/testnet-scripts/node_modules/
+/tools/testnet-scripts/package-lock.json
