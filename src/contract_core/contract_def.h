@@ -278,6 +278,16 @@
 
 #endif
 
+#undef CONTRACT_INDEX
+#undef CONTRACT_STATE_TYPE
+#undef CONTRACT_STATE2_TYPE
+
+#define QSB_CONTRACT_INDEX 27
+#define CONTRACT_INDEX QSB_CONTRACT_INDEX
+#define CONTRACT_STATE_TYPE QSB
+#define CONTRACT_STATE2_TYPE QSB2
+#include "contracts/QubicSolanaBridge.h"
+
 // new contracts should be added above this line
 
 #ifdef INCLUDE_CONTRACT_TEST_EXAMPLES
