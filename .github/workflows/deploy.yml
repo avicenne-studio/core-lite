@@ -1,99 +1,76 @@
 name: Deploy
 
 on:
+  workflow_run:
+    workflows: ["CI"]
+    branches: [main]
+    types: [completed]
   workflow_dispatch:
-    inputs:
-      configuration:
-        description: "Build configuration"
-        required: true
-        default: "Release"
-        type: string
-      build-dir:
-        description: "Build directory"
-        required: false
-        default: "build"
-        type: string
-      epoch:
-        description: "Epoch number"
-        required: true
-        type: number
-      epoch-file:
-        description: "Path to epoch file"
-        required: true
-        type: string
-      peers:
-        description: "Comma-separated list of peer addresses"
-        required: true
-        type: string
-        default: ""
 
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
-  build-linux:
-    uses: ./.github/workflows/linux-build.yml
-    with:
-      configuration: "Release"
-      build_dir: "build"
-
-  deploy-linux:
-    needs: build-linux
+  build-push:
+    if: ${{ (github.event_name == 'workflow_dispatch' && github.ref_name == 'main') || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') }}
     runs-on: ubuntu-latest
+    outputs:
+      workspace: ${{ steps.env.outputs.workspace }}
+
     steps:
-      - name: Download Linux build artifact
-        uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
+
+      - name: Resolve workspace
+        id: env
+        run: |
+          BRANCH=${{ github.event_name == 'workflow_dispatch' && github.ref_name || github.event.workflow_run.head_branch }}
+          if [[ "$BRANCH" == "main" ]]; then
+            echo "workspace=development" >> $GITHUB_OUTPUT
+          else
+            echo "Unsupported branch: $BRANCH" >&2
+            exit 1
+          fi
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
         with:
-          name: QubicLiteLinuxBuild-${{ inputs.configuration }}
-          path: ${{ inputs.build-dir }}
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
 
-      - name: Setup SSH key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ secrets.REGISTRY }} --quiet
 
-      - name: Deploy to multiple servers
-        run: |
-          # Check if there are no build artifacts then exit
-            if [ ! -f "${{ inputs.build-dir }}/src/Qubic" ]; then
-              echo "Build artifact not found!"
-              exit 1
-            fi
-          
-          # Check if there are no servers then exit
-            if [ -z "${{ vars.SERVERS }}" ]; then
-              echo "No servers specified for deployment."
-              exit 0
-            fi
-          
-          # Constant initialization
-          Executable=Qubic-${{ inputs.epoch }}
-          
-          # Loop through each server and deploy
-          for server in ${{ vars.SERVERS }}; do
-            echo "Deploying to $server..."
-            scp -o StrictHostKeyChecking=no ${{ inputs.build-dir }}/src/Qubic $server:/root/
-            ssh -o StrictHostKeyChecking=no $server /bin/bash "
-              # Start deployment commands here
-              sudo apt update && upgrade
-              sudo apt install -y build-essential clang cmake nasm
-              sudo apt install -y libc++-dev libc++abi-dev
-              cd /root
-              # Install unzip wget if not present
-              sudo apt-get update
-              sudo apt-get install -y unzip wget cronolog
-          
-              # Set up deployment directory
-              mkdir -p qlite-${{ inputs.epoch }}
-              mv /root/Qubic qlite-${{ inputs.epoch }}/$Executable
-              cd qlite-${{ inputs.epoch }}
-              chmod +x ./$Executable
-          
-              # Download and unzip epoch file
-              wget ${{ inputs.epoch-file }}
-              unzip $(basename ${{ inputs.epoch-file }})
-          
-              pkill Qubic-* || echo "No existing process found."
-              sleep 2
-              nohup sh -c 'stdbuf -oL -eL ./$Executable -s 32 --peers "${{ inputs.peers }}" 2>&1 | cronolog ./logs/qubic-%Y-%m-%d.log' > /dev/null 2>&1 &
-              "
-          done
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/testnet/Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/${{ steps.env.outputs.workspace }}/node:${{ github.sha }}
+            ${{ secrets.REGISTRY }}/${{ secrets.GCP_PROJECT_ID }}/${{ steps.env.outputs.workspace }}/node:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  trigger-deploy:
+    needs: build-push
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Dispatch deploy to infrastructure repo
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.INFRA_GITHUB_PAT }}
+          script: |
+            await github.rest.repos.createDispatchEvent({
+              owner: 'avicenne-studio',
+              repo: 'qs-bridge-infrastructure',
+              event_type: 'node-deploy',
+              client_payload: {
+                workspace: '${{ needs.build-push.outputs.workspace }}'
+              }
+            });
