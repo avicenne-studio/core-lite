@@ -1,0 +1,8 @@
+build/
+docker-build/
+out/
+.git/
+.idea/
+.vscode/
+.vs/
+.DS_Store
