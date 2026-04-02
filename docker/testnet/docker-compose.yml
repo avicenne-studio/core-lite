@@ -1,0 +1,19 @@
+services:
+  qubic-testnet:
+    platform: linux/amd64
+    build:
+      context: ../..
+      dockerfile: docker/testnet/Dockerfile
+    image: qubic-testnet:latest
+    container_name: qubic-testnet
+    restart: unless-stopped
+    ports:
+      - "31841:31841"
+      - "41841:41841"
+    volumes:
+      - qubic-testnet-data:/qubic
+    # Optional: slow down ticking if the testnet runs too fast
+    # command: ["--ticking-delay", "1000"]
+
+volumes:
+  qubic-testnet-data:

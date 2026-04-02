@@ -1371,7 +1371,14 @@ static unsigned char broadcastedComputorSeeds[][55 + 1] = {
 
 // If you want to fund any of your custom seeds with initial spectrum, add them here.
 static unsigned char customSeeds[][55 + 1] = {
-    "qubicorelitebyfeiyuivqubicqubicqubicqubicqubicquicqubic"
+    "qubicorelitebyfeiyuivqubicqubicqubicqubicqubicquicqubic",
+    "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv",
+    "cdurhkqskierufxnbljzmcesrqzbszrcyhlsgalysuvexuuunctcpqy",
+    "xnmitrkmaoonhiqsrzkrijtuylvwmlevgycftzuqvazztocsbynutff",
+    "tlmlvgydjkukkqqfsgoremcwxnkfwdqwdejxhygovwtwbvobckoqvgi",
+    "samglnucsljbwexjriwxwnmrnzyvqxwvmfgwzvutykentqmqroevsxn",
+    "anyfzfupcgmitadyetniysttqsvuluolkvbqbtzoiimlpkxgbogsxnd",
+    "gqekdnfapjrzxqqhlulhevcgftqsgkezxitgjfvphgcqthahxbleowz"
 };
 
 // number of private ips for computor's internal services

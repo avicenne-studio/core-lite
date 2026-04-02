@@ -1,0 +1,6 @@
+# Local build artifacts — prevent stale CMakeCache.txt from polluting Docker builds
+build/
+docker-build/
+
+# Git history (not needed for build)
+.git/

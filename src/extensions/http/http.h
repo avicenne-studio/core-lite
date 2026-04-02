@@ -167,6 +167,28 @@ private:
             });
 
         app.registerHandler(
+            "/toggle-main",
+            [](const HttpRequestPtr &req,
+               std::function<void(const HttpResponsePtr &)> &&callback)
+            {
+                Json::Value json;
+                if (requestPersistingNodeState == 1 || persistingNodeStateTickProcWaiting == 1)
+                {
+                    json["status"] = "error";
+                    json["message"] = "Unable to switch mode because node is saving states.";
+                }
+                else
+                {
+                    mainAuxStatus = (mainAuxStatus + 1) & 3;
+                    json["status"] = "ok";
+                    json["mainAuxStatus"] = mainAuxStatus;
+                    json["isMain"] = (bool)((mainAuxStatus & 1) == 1);
+                }
+                auto resp = HttpResponse::newHttpJsonResponse(json);
+                callback(resp);
+            });
+
+        app.registerHandler(
             "/request-save-snapshot",
             [](const HttpRequestPtr &req,
                std::function<void(const HttpResponsePtr &)> &&callback)
