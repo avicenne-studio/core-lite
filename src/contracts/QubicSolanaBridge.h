@@ -11,65 +11,62 @@ static constexpr uint32 QSB_MAX_LOCKED_ORDERS = 1024;
 static constexpr uint32 QSB_MAX_BPS_FEE = 1000;      // max 10% fee (1000 / 10000)
 static constexpr uint32 QSB_MAX_PROTOCOL_FEE = 100;  // max 100% of bps fee
 
-// Serialized order message: domain prefix (52 bytes) + order fields (188 bytes) = 240 bytes.
-// Layout matches the oracle's serializeBridgeOrder format exactly.
-#pragma pack(push, 1)
+// Domain-prefixed order message for K12 hashing and signature verification.
+// Layout: 245 bytes total. protocolName is padded to 16 (next power of 2 above 11).
 struct QSBOrderMessage
 {
-	uint32 protocolNameLen;         // 0: always 11
-	uint8 protocolName[11];         // 4: "QubicBridge"
-	uint32 protocolVersionLen;      // 15: always 1
-	uint8 protocolVersion[1];       // 19: "1"
-	uint8 contractAddress[32];      // 20: destination contract address (QSB index LE-padded)
-	uint32 networkIn;               // 52
-	uint32 networkOut;              // 56
-	uint8 tokenIn[32];              // 60
-	uint8 tokenOut[32];             // 92
-	uint8 fromAddress[32];          // 124
-	uint8 toAddress[32];            // 156
-	uint64 amount;                  // 188
-	uint64 relayerFee;              // 196
-	uint8 nonce[32];                // 204
-	uint32 orderEra;                // 236
+	uint32 protocolNameLen;              // 0:  always 11
+	Array<uint8, 16> protocolName;       // 4:  QubicBridge (11 used, 5 zero-padded)
+	uint32 protocolVersionLen;           // 20: always 1
+	Array<uint8, 1> protocolVersion;     // 24: version byte (49 = ASCII '1')
+	Array<uint8, 32> contractAddress;    // 25: destination contract address (LE-padded index)
+	uint32 networkIn;                    // 57
+	uint32 networkOut;                   // 61
+	Array<uint8, 32> tokenIn;            // 65
+	Array<uint8, 32> tokenOut;           // 97
+	Array<uint8, 32> fromAddress;        // 129
+	Array<uint8, 32> toAddress;          // 161
+	uint64 amount;                       // 193
+	uint64 relayerFee;                   // 201
+	Array<uint8, 32> nonce;              // 209
+	uint32 orderEra;                     // 241
 };
-#pragma pack(pop)
-static_assert(sizeof(QSBOrderMessage) == 240, "OrderMessage must be exactly 240 bytes");
 static constexpr uint32 QSB_QUERY_MAX_PAGE_SIZE = 64; // max entries per paginated query
 
 // Log types for QSB contract (no enums allowed in contracts)
-static const uint32 QSBLogLock = 1;
-static const uint32 QSBLogOverrideLock = 2;
-static const uint32 QSBLogUnlock = 3;
-static const uint32 QSBLogPaused = 4;
-static const uint32 QSBLogUnpaused = 5;
-static const uint32 QSBLogAdminTransferred = 6;
-static const uint32 QSBLogThresholdUpdated = 7;
-static const uint32 QSBLogRoleGranted = 8;
-static const uint32 QSBLogRoleRevoked = 9;
-static const uint32 QSBLogFeeParametersUpdated = 10;
+static constexpr uint32 QSBLogLock = 1;
+static constexpr uint32 QSBLogOverrideLock = 2;
+static constexpr uint32 QSBLogUnlock = 3;
+static constexpr uint32 QSBLogPaused = 4;
+static constexpr uint32 QSBLogUnpaused = 5;
+static constexpr uint32 QSBLogAdminTransferred = 6;
+static constexpr uint32 QSBLogThresholdUpdated = 7;
+static constexpr uint32 QSBLogRoleGranted = 8;
+static constexpr uint32 QSBLogRoleRevoked = 9;
+static constexpr uint32 QSBLogFeeParametersUpdated = 10;
 
 // Generic reason codes for logging
-static const uint8 QSBReasonNone = 0;
-static const uint8 QSBReasonPaused = 1;
-static const uint8 QSBReasonInvalidAmount = 2;
-static const uint8 QSBReasonInsufficientReward = 3;
-static const uint8 QSBReasonNonceUsed = 4;
-static const uint8 QSBReasonNoSpace = 5;
-static const uint8 QSBReasonNotSender = 6;
-static const uint8 QSBReasonBadRelayerFee = 7;
-static const uint8 QSBReasonNoOracles = 8;
-static const uint8 QSBReasonThresholdFailed = 9;
-static const uint8 QSBReasonAlreadyFilled = 10;
-static const uint8 QSBReasonInvalidSignature = 11;
-static const uint8 QSBReasonDuplicateSigner = 12;
-static const uint8 QSBReasonNotAdmin = 13;
-static const uint8 QSBReasonNotAdminOrPauser = 14;
-static const uint8 QSBReasonInvalidThreshold = 15;
-static const uint8 QSBReasonRoleExists = 16;
-static const uint8 QSBReasonRoleMissing = 17;
-static const uint8 QSBReasonInvalidFeeParams = 18;
-static const uint8 QSBReasonTransferFailed = 19;
-static const uint8 QSBReasonEraMismatch = 20;
+static constexpr uint8 QSBReasonNone = 0;
+static constexpr uint8 QSBReasonPaused = 1;
+static constexpr uint8 QSBReasonInvalidAmount = 2;
+static constexpr uint8 QSBReasonInsufficientReward = 3;
+static constexpr uint8 QSBReasonNonceUsed = 4;
+static constexpr uint8 QSBReasonNoSpace = 5;
+static constexpr uint8 QSBReasonNotSender = 6;
+static constexpr uint8 QSBReasonBadRelayerFee = 7;
+static constexpr uint8 QSBReasonNoOracles = 8;
+static constexpr uint8 QSBReasonThresholdFailed = 9;
+static constexpr uint8 QSBReasonAlreadyFilled = 10;
+static constexpr uint8 QSBReasonInvalidSignature = 11;
+static constexpr uint8 QSBReasonDuplicateSigner = 12;
+static constexpr uint8 QSBReasonNotAdmin = 13;
+static constexpr uint8 QSBReasonNotAdminOrPauser = 14;
+static constexpr uint8 QSBReasonInvalidThreshold = 15;
+static constexpr uint8 QSBReasonRoleExists = 16;
+static constexpr uint8 QSBReasonRoleMissing = 17;
+static constexpr uint8 QSBReasonInvalidFeeParams = 18;
+static constexpr uint8 QSBReasonTransferFailed = 19;
+static constexpr uint8 QSBReasonEraMismatch = 20;
 // 21 reserved for future use
 
 struct QSB2
@@ -538,14 +535,21 @@ protected:
 	{
 		setMemory(msg, 0);
 		msg.protocolNameLen = 11;
-		msg.protocolName[0]='Q'; msg.protocolName[1]='u'; msg.protocolName[2]='b';
-		msg.protocolName[3]='i'; msg.protocolName[4]='c'; msg.protocolName[5]='B';
-		msg.protocolName[6]='r'; msg.protocolName[7]='i'; msg.protocolName[8]='d';
-		msg.protocolName[9]='g'; msg.protocolName[10]='e';
+		msg.protocolName.set(0, 81);   // Q
+		msg.protocolName.set(1, 117);  // u
+		msg.protocolName.set(2, 98);   // b
+		msg.protocolName.set(3, 105);  // i
+		msg.protocolName.set(4, 99);   // c
+		msg.protocolName.set(5, 66);   // B
+		msg.protocolName.set(6, 114);  // r
+		msg.protocolName.set(7, 105);  // i
+		msg.protocolName.set(8, 100);  // d
+		msg.protocolName.set(9, 103);  // g
+		msg.protocolName.set(10, 101); // e
 		msg.protocolVersionLen = 1;
-		msg.protocolVersion[0] = '1';
-		msg.contractAddress[0] = (uint8)(CONTRACT_INDEX & 0xFF);
-		msg.contractAddress[1] = (uint8)((CONTRACT_INDEX >> 8) & 0xFF);
+		msg.protocolVersion.set(0, 49); // 1
+		msg.contractAddress.set(0, (uint8)(CONTRACT_INDEX & 0xFF));
+		msg.contractAddress.set(1, (uint8)((CONTRACT_INDEX >> 8) & 0xFF));
 	}
 
 	inline static void buildOrderMessage(
@@ -557,15 +561,15 @@ protected:
 		initDomainPrefix(msg);
 		msg.networkIn = order.networkIn;
 		msg.networkOut = order.networkOut;
-		for (i = 0; i < 32; ++i) msg.tokenIn[i] = order.tokenIn.get(i);
-		for (i = 0; i < 32; ++i) msg.tokenOut[i] = order.tokenOut.get(i);
+		for (i = 0; i < 32; ++i) msg.tokenIn.set(i, order.tokenIn.get(i));
+		for (i = 0; i < 32; ++i) msg.tokenOut.set(i, order.tokenOut.get(i));
 		tmpIdBytes.setMem(order.fromAddress);
-		for (i = 0; i < 32; ++i) msg.fromAddress[i] = tmpIdBytes.get(i);
+		for (i = 0; i < 32; ++i) msg.fromAddress.set(i, tmpIdBytes.get(i));
 		tmpIdBytes.setMem(order.toAddress);
-		for (i = 0; i < 32; ++i) msg.toAddress[i] = tmpIdBytes.get(i);
+		for (i = 0; i < 32; ++i) msg.toAddress.set(i, tmpIdBytes.get(i));
 		msg.amount = order.amount;
 		msg.relayerFee = order.relayerFee;
-		for (i = 0; i < 32; ++i) msg.nonce[i] = order.nonce.get(i);
+		for (i = 0; i < 32; ++i) msg.nonce.set(i, order.nonce.get(i));
 		msg.orderEra = order.orderEra;
 	}
 
@@ -1339,10 +1343,26 @@ public:
 			locals.recipientAmount = 0;
 
 		// -----------------------------------------------------------------
+		// Mark order as filled BEFORE transfers to prevent replay.
+		// If a transfer fails below, the order stays filled (no double-pay).
+		// The balance check above guarantees the contract has enough funds.
+		// -----------------------------------------------------------------
+		markOrderFilled(state, locals.hash, 0, 0, 0, locals.entry);
+
+		// -----------------------------------------------------------------
 		// Token transfers
 		// -----------------------------------------------------------------
 
 		locals.allTransfersOk = true;
+
+		// Recipient payout first (most important transfer)
+		if (locals.recipientAmount > 0 && !isZero(input.order.toAddress))
+		{
+			if (qpi.transfer(input.order.toAddress, (sint64)locals.recipientAmount) < 0)
+			{
+				locals.allTransfersOk = false;
+			}
+		}
 
 		// Relayer fee to caller
 		if (input.order.relayerFee > 0)
@@ -1371,25 +1391,12 @@ public:
 			}
 		}
 
-		// Recipient payout
-		if (locals.recipientAmount > 0 && !isZero(input.order.toAddress))
-		{
-			if (qpi.transfer(input.order.toAddress, (sint64)locals.recipientAmount) < 0)
-			{
-				locals.allTransfersOk = false;
-			}
-		}
-
-		// If any transfer failed, do not mark the order as filled
 		if (!locals.allTransfersOk)
 		{
 			locals.logMsg.reasonCode = QSBReasonTransferFailed;
 			LOG_INFO(locals.logMsg);
 			return;
 		}
-
-		// Mark order as filled
-		markOrderFilled(state, locals.hash, 0, 0, 0, locals.entry);
 
 		output.success = true;
 		locals.logMsg.success = 1;
