@@ -37,8 +37,6 @@
 #define system qsystem
 #endif
 
-// #define OLD_QRWA
-
 //#define INCLUDE_CONTRACT_TEST_EXAMPLES
 
 // contract_def.h needs to be included first to make sure that contracts have minimal access
