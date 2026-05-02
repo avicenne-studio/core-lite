@@ -4842,6 +4842,9 @@ static void updateFutureTickCount()
 // 2: not enough votes to decide
 static int findCurrentDigestsFromNextTickVotes(m256i &spectrumDigest, unsigned int &resourceTestingDigest)
 {
+    static std::unordered_map<unsigned int, int> resourceTestingDigestQuorumCountMap;
+    resourceTestingDigestQuorumCountMap.clear();
+
     const unsigned int nextTick = system.tick + 1;
     const unsigned int nextTickIndex = ts.tickToIndexCurrentEpoch(nextTick);
     const Tick* tsCompTicks = ts.ticks.getByTickIndex(nextTickIndex);
@@ -4888,10 +4891,10 @@ static int findCurrentDigestsFromNextTickVotes(m256i &spectrumDigest, unsigned i
             if (tsCompTicks[i].prevSpectrumDigest == spectrumDigest)
             {
                 resourceTestingDigest = tsCompTicks[i].prevResourceTestingDigest;
-                break;
+                resourceTestingDigestQuorumCountMap[resourceTestingDigest]++;
             }
         }
-        return 1;
+        goto pickAndReturnOk;
     } else
     {
         if (isZero(targetNextTickDataDigest) && uniqueCurrentSpectrumDigestCounters[mostPopularUniqueCurrentSpectrumDigestIndex] > NUMBER_OF_COMPUTORS - QUORUM)
@@ -4902,10 +4905,10 @@ static int findCurrentDigestsFromNextTickVotes(m256i &spectrumDigest, unsigned i
                 if (tsCompTicks[i].prevSpectrumDigest == spectrumDigest)
                 {
                     resourceTestingDigest = tsCompTicks[i].prevResourceTestingDigest;
-                    break;
+                    resourceTestingDigestQuorumCountMap[resourceTestingDigest]++;
                 }
             }
-            return 1;
+            goto pickAndReturnOk;
         }
 
         if (totalUniqueCurrentSpectrumDigestCounter < NUMBER_OF_COMPUTORS)
@@ -4920,6 +4923,21 @@ static int findCurrentDigestsFromNextTickVotes(m256i &spectrumDigest, unsigned i
 
         return 0;
     }
+
+pickAndReturnOk:
+    // pick the most popular resourceTestingDigest among the votes that have the same prevSpectrumDigest
+    int mostPopularResourceTestingDigest = 0;
+    int mostPopularResourceTestingDigestQuorumCount = 0;
+    for (const auto &pair : resourceTestingDigestQuorumCountMap)
+    {
+        if (pair.second > mostPopularResourceTestingDigestQuorumCount)
+        {
+            mostPopularResourceTestingDigest = pair.first;
+            mostPopularResourceTestingDigestQuorumCount = pair.second;
+        }
+    }
+    resourceTestingDigest = mostPopularResourceTestingDigest;
+    return 1;
 }
 
 
