@@ -4937,6 +4937,13 @@ pickAndReturnOk:
         }
     }
     resourceTestingDigest = mostPopularResourceTestingDigest;
+
+    // mostPopularResourceTestingDigestQuorumCount must >= QUORUM
+    if (mostPopularResourceTestingDigestQuorumCount < QUORUM)
+    {
+        return 2;
+    }
+
     return 1;
 }
 
