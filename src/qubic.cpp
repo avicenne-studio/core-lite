@@ -2773,10 +2773,12 @@ static void processTickTransaction(const Transaction* transaction, unsigned int 
     const m256i& transactionDigest = nextTickData.transactionDigests[transactionIndex];
     const m256i& dataLock = nextTickData.timelock;
 
+#ifdef TESTNET
     // Record the tx with digest
-    // ts.transactionsDigestAccess.acquireLock();
-    // ts.transactionsDigestAccess.insertTransaction(transactionDigest, txOffset);
-    // ts.transactionsDigestAccess.releaseLock();
+    ts.transactionsDigestAccess.acquireLock();
+    ts.transactionsDigestAccess.insertTransaction(transactionDigest, txOffset);
+    ts.transactionsDigestAccess.releaseLock();
+#endif
 
 #if !defined(NDEBUG)
     if (isZero(transaction->destinationPublicKey))
