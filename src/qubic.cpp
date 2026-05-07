@@ -1096,9 +1096,12 @@ static void processBroadcastTransaction(Peer* peer, RequestResponseHeader* heade
                 const int spectrumIdx = spectrumIndex(request->sourcePublicKey);
                 if (spectrumIdx >= 0 && energy(spectrumIdx) >= MiningSolutionTransaction::minAmount())
                 {
-                    const m256i& solutionMiningSeed = *(m256i*)request->inputPtr();
-                    const m256i& solutionNonce = *(m256i*)(request->inputPtr() + 32);
-                    (*score)(processorNumber, request->sourcePublicKey, solutionMiningSeed, solutionNonce);
+                    if (isMainMode() || forceVerifySolutions)
+                    {
+                        const m256i& solutionMiningSeed = *(m256i*)request->inputPtr();
+                        const m256i& solutionNonce = *(m256i*)(request->inputPtr() + 32);
+                        (*score)(processorNumber, request->sourcePublicKey, solutionMiningSeed, solutionNonce);
+                    }
                 }
             }
 
