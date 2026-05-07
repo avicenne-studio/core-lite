@@ -1952,8 +1952,8 @@ static void requestProcessor(void* ProcedureArgument, unsigned long long process
             _InterlockedDecrement(&epochTransitionWaitingRequestProcessors);
         }
 
-        // try to compute a solution if any is queued and this thread is assigned to compute solution
-        if (solutionProcessorFlags[processorNumber])
+        // try to compute a solution if any is queued and this thread is assigned to compute solution EXCEPT for last processor
+        if (solutionProcessorFlags[processorNumber] && processorNumber != (numberOfProcessors - 1))
         {
             PROFILE_NAMED_SCOPE("requestProcessor(): solution processing");
             score->tryProcessSolution(processorNumber);
