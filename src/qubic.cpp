@@ -3308,6 +3308,22 @@ static void processTick(unsigned long long processorNumber)
         unsigned int nContractTx = 0;
         unsigned int nOtherTx = 0;
         const m256i& tickLeaderKey = broadcastedComputors.computors.publicKeys[system.tick % NUMBER_OF_COMPUTORS];
+
+        // Backup the spectrum data first
+        for (unsigned int transactionIndex = 0; transactionIndex < NUMBER_OF_TRANSACTIONS_PER_TICK; transactionIndex++)
+        {
+            if (!isZero(nextTickData.transactionDigests[transactionIndex]))
+            {
+                if (tsCurrentTickTransactionOffsets[transactionIndex])
+                {
+                    Transaction* transaction = ts.tickTransactions(tsCurrentTickTransactionOffsets[transactionIndex]);
+                    // Store spectrum data for rollback if there is invalid solutions in the tick
+                    auto sourceSpectrumIndex = ::spectrumIndex(transaction->sourcePublicKey);
+                    spectrumDataRollback[transactionIndex] = spectrum[sourceSpectrumIndex];
+                }
+            }
+        }
+
         for (unsigned int transactionIndex = 0; transactionIndex < NUMBER_OF_TRANSACTIONS_PER_TICK; transactionIndex++)
         {
             if (!isZero(nextTickData.transactionDigests[transactionIndex]))
@@ -3321,9 +3337,7 @@ static void processTick(unsigned long long processorNumber)
                     {
                         isThereQearnTx = true;
                     }
-                    // Store spectrum data for rollback if there is invalid solutions in the tick
-                    auto sourceSpectrumIndex = ::spectrumIndex(transaction->sourcePublicKey);
-                    spectrumDataRollback[transactionIndex] = spectrum[sourceSpectrumIndex];
+
                     processTickTransaction(transaction, transactionIndex, tsCurrentTickTransactionOffsets[transactionIndex], processorNumber);
 
                     if (transaction->sourcePublicKey == tickLeaderKey)
@@ -5597,6 +5611,9 @@ void reprocessSolutionTransaction(unsigned long long processorNumber)
 
     solutionTotalExecutionTicks = __rdtsc() - solutionProcessStartTick; // for tracking the time processing solutions
 
+    std::vector<int> latestIncomingTransferTickPreserveSpectrumIndexes;
+    latestIncomingTransferTickPreserveSpectrumIndexes.reserve(32);
+
     ts.tickData.acquireLock();
     for (unsigned int transactionIndex = 0; transactionIndex < NUMBER_OF_TRANSACTIONS_PER_TICK; transactionIndex++)
     {
@@ -5626,6 +5643,22 @@ void reprocessSolutionTransaction(unsigned long long processorNumber)
 
                         // Then, process the transaction again
                         processTickTransactionSolution((MiningSolutionTransaction*)transaction, transactionIndex, processorNumber, true);
+
+                        // if the latestIncomingTransferTick after != previous (correct sol) -> we need to preserve latestIncomingTransferTick to avoid later incorrect sol reset it.
+                        ACQUIRE(spectrumLock);
+                        if (spectrum[spectrumIndex].latestIncomingTransferTick != spectrumDataRollback[transactionIndex].latestIncomingTransferTick)
+                        {
+                            latestIncomingTransferTickPreserveSpectrumIndexes.push_back(spectrumIndex);
+                        }
+                        RELEASE(spectrumLock);
+                    } else
+                    {
+                        // standard tx always change dest latestIncomingTransferTick
+                        const int destSpectrumIndex = ::spectrumIndex(transaction->destinationPublicKey);
+                        if (destSpectrumIndex >= 0)
+                        {
+                            latestIncomingTransferTickPreserveSpectrumIndexes.push_back(destSpectrumIndex);
+                        }
                     }
                 }
             }
@@ -5639,6 +5672,14 @@ void reprocessSolutionTransaction(unsigned long long processorNumber)
             }
         }
     }
+
+    for (int spectrumIndex : latestIncomingTransferTickPreserveSpectrumIndexes)
+    {
+        ACQUIRE(spectrumLock);
+        spectrum[spectrumIndex].latestIncomingTransferTick = system.tick;
+        RELEASE(spectrumLock);
+    }
+
     ts.tickData.releaseLock();
     isReprocessingSolutions = false;
 }
