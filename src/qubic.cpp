@@ -896,12 +896,16 @@ static void processBroadcastTick(Peer* peer, RequestResponseHeader* header)
                 // Copy the sent tick to the tick storage
                 copyMem(tsTick, &request->tick, sizeof(Tick));
                 peer->lastActiveTick = max(peer->lastActiveTick, peer->getDejavuTick(header->dejavu()));
+                peer->peerReportedTick = max(peer->peerReportedTick, request->tick.tick);
             }
 
             ts.ticks.releaseLock(request->tick.computorIndex);
         }
     }
 }
+
+#include "optimizations/opt_config.h"
+#include "optimizations/opt_eager_tx_fetch.h"
 
 static void processBroadcastFutureTickData(Peer* peer, RequestResponseHeader* header)
 {
@@ -981,6 +985,7 @@ static void processBroadcastFutureTickData(Peer* peer, RequestResponseHeader* he
                             {
                                 copyMem(&td, &request->tickData, sizeof(TickData));
                                 peer->lastActiveTick = max(peer->lastActiveTick, peer->getDejavuTick(header->dejavu()));
+                                peer->peerReportedTick = max(peer->peerReportedTick, request->tickData.tick);
 
                                 if (memcmp(&td, &request->tickData, sizeof(TickData)) != 0)
                                 {
@@ -990,6 +995,12 @@ static void processBroadcastFutureTickData(Peer* peer, RequestResponseHeader* he
                                         bs->Stall(1'000'000);
                                     }
                                 }
+
+#if USE_EAGER_TX_FETCH
+                                ts.tickData.releaseLock();
+                                eagerFetchMissingTransactions(request->tickData);
+                                ts.tickData.acquireLock();
+#endif
                             }
                         }
                     }
@@ -1019,6 +1030,13 @@ static void processBroadcastFutureTickData(Peer* peer, RequestResponseHeader* he
                         {
                             copyMem(&td, &request->tickData, sizeof(TickData));
                             peer->lastActiveTick = max(peer->lastActiveTick, peer->getDejavuTick(header->dejavu()));
+                            peer->peerReportedTick = max(peer->peerReportedTick, request->tickData.tick);
+
+#if USE_EAGER_TX_FETCH
+                            ts.tickData.releaseLock();
+                            eagerFetchMissingTransactions(request->tickData);
+                            ts.tickData.acquireLock();
+#endif
                         }
                     }
                 }
@@ -8210,6 +8228,8 @@ static void processKeyPresses()
     }
 }
 
+#include "optimizations/opt_future_tick_prefetch.h"
+
 EFI_STATUS efi_main(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE* systemTable)
 {
     ih = imageHandle;
@@ -8611,6 +8631,11 @@ EFI_STATUS efi_main(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE* systemTable)
                         pushToAnyFullNode(&requestedQuorumTick.header);
                     }
                     futureTickRequestingIndicator = gFutureTickTotalNumberOfComputors;
+
+#if USE_FUTURE_TICK_PREFETCH
+                    const unsigned int prefetchDepth = opt_future_tick_prefetch::computePrefetchDepth();
+#endif
+
                     ts.tickData.acquireLock();
                     if ((ts.tickData[system.tick + 1 - system.initialTick].epoch != system.epoch
                         || targetNextTickDataDigestIsKnown)
@@ -8634,6 +8659,16 @@ EFI_STATUS efi_main(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE* systemTable)
                     }
                     ts.tickData.releaseLock();
 
+#if USE_FUTURE_TICK_PREFETCH
+                    if (prefetchDepth > 2)
+                    {
+                        // Prefetch tickData for ticks +3..+prefetchDepth (lock acquired internally)
+                        opt_future_tick_prefetch::requestFutureTickData(prefetchDepth);
+                        // Prefetch quorum tick (votes) for ticks +2..+prefetchDepth
+                        opt_future_tick_prefetch::requestFutureQuorumTicks(prefetchDepth);
+                    }
+#endif
+
                     if (requestedTickTransactions.requestedTickTransactions.tick)
                     {
                         requestedTickTransactions.header.randomizeDejavu();
@@ -8642,6 +8677,11 @@ EFI_STATUS efi_main(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE* systemTable)
 
                         requestedTickTransactions.requestedTickTransactions.tick = 0;
                     }
+
+#if USE_FUTURE_TICK_PREFETCH
+                    // Prefetch all transactions for future ticks that already have tickData
+                    opt_future_tick_prefetch::requestFutureTickTransactions(prefetchDepth);
+#endif
                 }
 
                 // Add messages from response queue to sending buffer
