@@ -139,6 +139,7 @@ static volatile bool isReprocessingSolutions = false;
 #include "extensions/global_data.h"
 #include "extensions/cxxopts.h"
 #include "extensions/overload.h"
+#include "extensions/lite_checkin.h"
 
 TickStorage::TransactionsDigestAccess TickStorage::transactionsDigestAccess;
 #ifdef _WIN32
@@ -2216,6 +2217,13 @@ static void requestProcessor(void* ProcedureArgument, unsigned long long process
                 }
                 break;
 #endif
+
+                /* lite-extension: process RequestLiteCheckin message (P2P /tick-info) */
+                case LiteCheckin::RequestLiteCheckin::type():
+                {
+                    LiteCheckin::processRequest(peer, header);
+                }
+                break;
 
                 }
 
@@ -9239,8 +9247,6 @@ void processArgs(int argc, const char* argv[]) {
 #if defined(__linux__) && !defined(NO_RPC)
 void watchAndCheckin()
 {
-    // init start time
-    getCheckInData();
     // start watch thread
     auto checkinThread = std::thread([&]() {
         while (true) {
