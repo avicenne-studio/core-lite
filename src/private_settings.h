@@ -1381,7 +1381,7 @@ static unsigned char customSeeds[][55 + 1] = {
 // You can find current peer IPs at https://app.qubic.li/network/live
 static const unsigned char knownPublicPeers[][4] = {
     {127, 0, 0, 1}, // DONT REMOVE THIS
-    // Add more node ips here
+    {172, 28, 0, 2}, // echo peer (Docker bridge, see core-bob/docker/examples/docker-compose.yml)
 };
 
 /* Whitelisting has been disabled, as requesting the IP of the incoming connection freezes the node occasionally

@@ -16,7 +16,7 @@
 
 ////////////////// USER CONFIGURABLE OPTIONS (default is for mainnet with swap feature) \\\\\\\\\\\\\\\\
 
-// #define TESTNET // UNCOMMENT this line if you want to compile for testnet
+#define TESTNET // UNCOMMENT this line if you want to compile for testnet
 // #define TESTNET_PREFILL_QUS // UNCOMMENT this line if you want to send test QUs to computors/custom address at epoch begin
 // this option enables using disk as RAM to reduce hardware requirement for qubic core node
 // it is highly recommended to enable this option if you want to run a full mainnet node on SSD
@@ -7167,6 +7167,11 @@ static bool initialize()
            setContractFeeReserve(i, 10'000'000'000);
         }
     }
+
+    // Testnet bootstrap creates synthetic asset/share state before the first real
+    // tick. Those logs are not part of the live chain and confuse downstream
+    // indexers, so restart logging from a clean tick boundary after bootstrap.
+    logger.reset(system.initialTick);
 #endif
 
     initializeContractErrors();
