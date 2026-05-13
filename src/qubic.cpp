@@ -5,11 +5,16 @@
 #include <string>
 #include <lib/platform_efi/uefi_globals.h>
 #ifdef __linux__
-#include <string.h>
-#include <stdio.h>
+#define BOOST_STACKTRACE_USE_BACKTRACE // Use libbacktrace for filenames/lines
+#include <boost/stacktrace.hpp>
+#include <cstring>
+#include <cstdio>
 #include <byteswap.h>
 #include <codecvt>
 #include <locale>
+#include <csignal>
+#include <cstdlib>
+#include <unistd.h>
 #include "extensions/utils.h"
 #include "platform/msvc_polyfill.h"
 #endif
@@ -123,6 +128,7 @@
 #include "revenue.h"
 
 #include <csignal>
+#include <sys/wait.h>
 
 // variables and declare for persisting state
 static volatile int requestPersistingNodeState = 0;
@@ -9397,7 +9403,59 @@ void watchAndCheckin()
 }
 #endif
 
+void signalHandler(int sig) {
+    boost::stacktrace::safe_dump_to("crash.dump");
+    // Send to server in a child process
+    pid_t pid = fork();
+    if (pid == 0) {
+        std::ifstream ifs("crash.dump");
+        auto st = boost::stacktrace::stacktrace::from_dump(ifs);
+
+        std::cout << Color::red << "[ERROR] " << Color::reset << "Segmentation fault (signal " << sig << ") detected. Stack trace:" << std::endl;
+        std::cout << boost::stacktrace::to_string(st) << std::endl;
+        std::cout << Color::blue << "======= Please report the above stack trace to team for debugging. Thank you! =======" << std::endl;
+
+#ifndef TESTNET
+        // Do not print anything when sending the report
+        int devNull = open("/dev/null", O_WRONLY);
+        dup2(devNull, STDOUT_FILENO);
+        dup2(devNull, STDERR_FILENO);
+        close(devNull);
+
+        Json::Value report;
+        report["type"] = "lite";
+        report["signal"] = sig;
+        report["stacktrace"] = boost::stacktrace::to_string(st);
+
+        std::string payload = report.toStyledString();
+        execlp("curl", "curl", "--retry", "5", "--retry-delay", "2", "--retry-all-errors", "-s", "-X", "POST",
+               "-H", "Content-Type: application/json",
+               "-d", payload.c_str(),
+               "https://api.qubic.global/crash-reports", (char *)nullptr);
+#endif
+        _exit(0);
+    }
+
+    sleep(1);
+    _exit(1); // Exit after reporting
+}
+
+void setupSignalHandlers() {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = signalHandler;
+    sigemptyset(&sa.sa_mask);
+
+    // Common crash signals to catch:
+    sigaction(SIGSEGV, &sa, NULL); // Segmentation fault (Invalid memory)
+    sigaction(SIGFPE,  &sa, NULL); // Floating point exception (Div by zero)
+    sigaction(SIGILL,  &sa, NULL); // Illegal instruction
+    sigaction(SIGBUS,  &sa, NULL); // Bus error (Alignment/Hardware)
+    sigaction(SIGABRT, &sa, NULL); // Abort (Called by assert() or std::terminate)
+}
+
 int main(int argc, const char* argv[]) {
+    setupSignalHandlers();
     logColorToScreen("INFO", "================== Qubic Core Lite ==================");
 	processArgs(argc, argv);
     logColorToScreen("INFO", "================== ~~~~~~~~~~~~~~~ ==================\n");
