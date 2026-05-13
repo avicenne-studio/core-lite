@@ -1371,7 +1371,17 @@ static unsigned char broadcastedComputorSeeds[][55 + 1] = {
 
 // If you want to fund any of your custom seeds with initial spectrum, add them here.
 static unsigned char customSeeds[][55 + 1] = {
-    "qubicorelitebyfeiyuivqubicqubicqubicqubicqubicquicqubic"
+    "qubicorelitebyfeiyuivqubicqubicqubicqubicqubicquicqubic", // legacy funder
+    "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv", // admin      (.temp/qubic-admin.keys.json)
+    "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh", // oracle-1   (.temp/oracle-1.qubic.keys.json)
+    "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg", // oracle-2   (.temp/oracle-2.qubic.keys.json)
+    "hwrmwgyjvytgemdqcewrufgumgukfsvgudaqnujykjnindlaxkjzrke", // oracle-3   (.temp/oracle-3.qubic.keys.json)
+    "pvdlzxjxnzbrlutlcvjfnmcmwmyyjzifczztqycnultdaekezffkpdz", // oracle-4   (.temp/oracle-4.qubic.keys.json)
+    "apmtsmsnrawvzwdympngnxfivnktidmfdhtltprsepmryihmeqteokh",  // oracle-5   (.temp/oracle-5.qubic.keys.json)
+    "knxhupfxcfyvkrrdawbkotquiqrgzlijmltmxmpddtprtkmvmmvrxoc", // oracle-6   (.temp/oracle-6.qubic.keys.json)
+    "egvjaaxjhmdchoumtbqpfitscgjknqmvsvgyodkydmdzcfinafxopmg", // pauser     (.temp/qubic-pauser.keys.json)
+    "fuhvrgshfjkowctygylvovlcxhzajduyltrrqjexvmtvnhlxylvdnoa", // relayer    (.temp/qubic-relayer.keys.json)
+    "fpfccuyllfkhdadcwasfyjrcwjaoqrxizaqpiltnhbxtnoywlduhrem",  // user       (.temp/qubic-user.keys.json)
 };
 
 // number of private ips for computor's internal services

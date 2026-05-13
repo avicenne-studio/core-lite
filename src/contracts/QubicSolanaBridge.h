@@ -1932,7 +1932,8 @@ public:
 	INITIALIZE()
 	{
 		// No admin set initially; first TransferAdmin call bootstraps admin.
-		state.mut().admin = id(100, 200, 300, 400);
+		// Admin = SINUBYSBZKBSVEFQDZBQWUEJWRXCXOZNKPHIXDZWRBKXDSPJEHFAMBACXHUN (.temp/qubic-admin.keys.json)
+		state.mut().admin = id(11994886480163374182ULL, 7222723150474050185ULL, 4187743050690849231ULL, 4967671197750064684ULL);
 		state.mut().paused = false;
 
 		state.mut().oracleThreshold                   = 67; // default 67% (2/3 + 1 style)
