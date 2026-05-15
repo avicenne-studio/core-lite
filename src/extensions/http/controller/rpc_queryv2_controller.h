@@ -1,6 +1,6 @@
 #pragma once
-#include "extensions/utils.h"
 #include "../utils.h"
+#include "extensions/utils.h"
 #include <drogon/HttpController.h>
 #include <fmt/format.h>
 using namespace drogon;
@@ -18,7 +18,7 @@ namespace MiddleWare
 {
 class TickNumberVerifier : public HttpMiddleware<TickNumberVerifier>
 {
-public:
+  public:
     TickNumberVerifier() {}
 
     void invoke(const HttpRequestPtr &req,
@@ -57,7 +57,8 @@ public:
             res->setStatusCode(k400BadRequest);
             mcb(res);
             return;
-        } else if (tickNumber < system.initialTick)
+        }
+        else if (tickNumber < system.initialTick)
         {
             result["code"] = StatusCode::BadRequest;
             result["message"] = fmt::format("invalid tick number: rpc error: code = OutOfRange desc = provided tick number {} was skipped by the system, next available tick is {}", tickNumber, system.initialTick);
@@ -67,10 +68,11 @@ public:
             return;
         }
 
-        nextCb([mcb = std::move(mcb)](const HttpResponsePtr &resp) { mcb(resp); });
+        nextCb([mcb = std::move(mcb)](const HttpResponsePtr &resp)
+               { mcb(resp); });
     }
 };
-}
+} // namespace MiddleWare
 
 class RpcQueryV2Controller : public HttpController<RpcQueryV2Controller>
 {
@@ -264,22 +266,66 @@ class RpcQueryV2Controller : public HttpController<RpcQueryV2Controller>
             cb(res);
             return;
         }
-        TickStorage::transactionsDigestAccess.acquireLock();
-        const Transaction *transaction = TickStorage::transactionsDigestAccess.findTransaction(txDigest);
-        if (!transaction)
+
+        unsigned int foundTick = 0;
+        unsigned int foundSlot = 0;
+        bool found = false;
+        TickData localTickData;
+        for (unsigned int tick = system.initialTick; tick <= system.tick && !found; tick++)
+        {
+            TickStorage::tickData.acquireLock();
+            TickData *tickData = TickStorage::tickData.getByTickIfNotEmpty(tick);
+            if (tickData)
+            {
+                copyMem(&localTickData, tickData, sizeof(TickData));
+            }
+            TickStorage::tickData.releaseLock();
+            if (!tickData)
+            {
+                continue;
+            }
+            for (unsigned int i = 0; i < NUMBER_OF_TRANSACTIONS_PER_TICK; i++)
+            {
+                if (localTickData.transactionDigests[i] == txDigest)
+                {
+                    foundTick = tick;
+                    foundSlot = i;
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if (!found)
         {
             result["code"] = StatusCode::NotFound;
             result["message"] = "Transaction not found";
             auto resp = HttpResponse::newHttpJsonResponse(result);
             resp->setStatusCode(k404NotFound);
             cb(resp);
-            TickStorage::transactionsDigestAccess.releaseLock();
             return;
         }
-        Json::Value jsonObject = HttpUtils::transactionToJson(const_cast<Transaction *>(transaction));
+
+        ts.tickTransactions.acquireLock();
+        unsigned long long txOffset = ts.tickTransactionOffsets(foundTick, foundSlot);
+        if (!txOffset)
+        {
+            ts.tickTransactions.releaseLock();
+            result["code"] = StatusCode::NotFound;
+            result["message"] = "Transaction not found";
+            auto resp = HttpResponse::newHttpJsonResponse(result);
+            resp->setStatusCode(k404NotFound);
+            cb(resp);
+            return;
+        }
+        Transaction *txPtr = ts.tickTransactions(txOffset);
+        const unsigned int txTotalSize = txPtr->totalSize();
+        std::vector<unsigned char> txBuf(txTotalSize);
+        copyMem(txBuf.data(), txPtr, txTotalSize);
+        ts.tickTransactions.releaseLock();
+
+        Json::Value jsonObject = HttpUtils::transactionToJson(reinterpret_cast<Transaction *>(txBuf.data()));
         auto resp = HttpResponse::newHttpJsonResponse(jsonObject);
         cb(resp);
-        TickStorage::transactionsDigestAccess.releaseLock();
     }
 
     inline void getTransactionsForIdentity(const HttpRequestPtr &req,
@@ -288,201 +334,210 @@ class RpcQueryV2Controller : public HttpController<RpcQueryV2Controller>
         try
         {
             Json::Value result;
-        auto json = req->getJsonObject();
-        if (!json)
-        {
-            result["code"] = StatusCode::BadRequest;
-            result["message"] = "Invalid JSON";
-            auto res = HttpResponse::newHttpJsonResponse(result);
-            res->setStatusCode(k400BadRequest);
-            cb(res);
-            return;
-        }
-
-        // check if identity field exists
-        if (!(*json).isMember("identity"))
-        {
-            result["code"] = StatusCode::BadRequest;
-            result["message"] = "Missing identity field";
-            auto res = HttpResponse::newHttpJsonResponse(result);
-            res->setStatusCode(k400BadRequest);
-            cb(res);
-            return;
-        }
-
-        // type: map<string,string>
-        auto filters = (*json)["filters"];
-        // type: map<string, Range>
-        auto ranges = (*json)["ranges"];
-        // type
-        // {
-        //     offset: number,
-        //     size: number
-        // }
-        auto pagination = (*json)["pagination"];
-
-        std::string identityStr = (*json)["identity"].asString();
-        m256i publicKey{};
-        if (!getPublicKeyFromIdentity(reinterpret_cast<const unsigned char *>(identityStr.c_str()), publicKey.m256i_u8))
-        {
-            result["code"] = StatusCode::BadRequest;
-            result["message"] = fmt::format("invalid id format: invalid identity [{}]", identityStr);
-            auto res = HttpResponse::newHttpJsonResponse(result);
-            res->setStatusCode(k400BadRequest);
-            cb(res);
-            return;
-        }
-
-        Json::Value transactions(Json::arrayValue);
-        TickStorage::transactionsDigestAccess.acquireLock();
-        for (unsigned int tick = system.initialTick; tick <= system.tick; tick++)
-        {
-            TickData *tickData = TickStorage::tickData.getByTickIfNotEmpty(tick);
-            if (!tickData)
+            auto json = req->getJsonObject();
+            if (!json)
             {
-                continue;
+                result["code"] = StatusCode::BadRequest;
+                result["message"] = "Invalid JSON";
+                auto res = HttpResponse::newHttpJsonResponse(result);
+                res->setStatusCode(k400BadRequest);
+                cb(res);
+                return;
             }
 
-            for (unsigned int i = 0; i < NUMBER_OF_TRANSACTIONS_PER_TICK; i++)
+            // check if identity field exists
+            if (!(*json).isMember("identity"))
             {
-                m256i &txDigest = tickData->transactionDigests[i];
-                if (isZero(txDigest))
+                result["code"] = StatusCode::BadRequest;
+                result["message"] = "Missing identity field";
+                auto res = HttpResponse::newHttpJsonResponse(result);
+                res->setStatusCode(k400BadRequest);
+                cb(res);
+                return;
+            }
+
+            // type: map<string,string>
+            auto filters = (*json)["filters"];
+            // type: map<string, Range>
+            auto ranges = (*json)["ranges"];
+            // type
+            // {
+            //     offset: number,
+            //     size: number
+            // }
+            auto pagination = (*json)["pagination"];
+
+            std::string identityStr = (*json)["identity"].asString();
+            m256i publicKey{};
+            if (!getPublicKeyFromIdentity(reinterpret_cast<const unsigned char *>(identityStr.c_str()), publicKey.m256i_u8))
+            {
+                result["code"] = StatusCode::BadRequest;
+                result["message"] = fmt::format("invalid id format: invalid identity [{}]", identityStr);
+                auto res = HttpResponse::newHttpJsonResponse(result);
+                res->setStatusCode(k400BadRequest);
+                cb(res);
+                return;
+            }
+
+            Json::Value transactions(Json::arrayValue);
+            std::vector<std::vector<unsigned char>> matchedBufs;
+            for (unsigned int tick = system.initialTick; tick <= system.tick; tick++)
+            {
+                TickData localTickData;
+                TickStorage::tickData.acquireLock();
+                TickData *tickData = TickStorage::tickData.getByTickIfNotEmpty(tick);
+                if (tickData)
+                {
+                    copyMem(&localTickData, tickData, sizeof(TickData));
+                }
+                TickStorage::tickData.releaseLock();
+                if (!tickData)
                 {
                     continue;
                 }
 
-                const Transaction *transaction = TickStorage::transactionsDigestAccess.findTransaction(txDigest);
-                if (!transaction)
+                ts.tickTransactions.acquireLock();
+                unsigned long long *offsets = ts.tickTransactionOffsets.getByTickInCurrentEpoch(tick);
+                for (unsigned int i = 0; i < NUMBER_OF_TRANSACTIONS_PER_TICK; i++)
                 {
-                    continue;
-                }
-
-                if (transaction->sourcePublicKey == publicKey)
-                {
-                    Json::Value txJson = HttpUtils::transactionToJson((Transaction *)transaction);
-                    transactions.append(txJson);
-                }
-            }
-        }
-        TickStorage::transactionsDigestAccess.releaseLock();
-
-        // filter transactions based on filters
-        if (filters.isObject())
-        {
-            Json::Value filteredTransactions(Json::arrayValue);
-            for (unsigned int i = 0; i < transactions.size(); i++)
-            {
-                Json::Value tx = transactions[i];
-                bool match = true;
-                for (const auto &key : filters.getMemberNames())
-                {
-                    if (tx.isMember(key))
+                    if (isZero(localTickData.transactionDigests[i]) || !offsets[i])
                     {
-                        if (tx[key].asString() != filters[key].asString())
-                        {
-                            match = false;
-                            break;
-                        }
+                        continue;
+                    }
+                    Transaction *txPtr = ts.tickTransactions(offsets[i]);
+                    if (txPtr->sourcePublicKey == publicKey)
+                    {
+                        const unsigned int txTotalSize = txPtr->totalSize();
+                        matchedBufs.emplace_back(txTotalSize);
+                        copyMem(matchedBufs.back().data(), txPtr, txTotalSize);
                     }
                 }
-                if (match)
-                {
-                    filteredTransactions.append(tx);
-                }
+                ts.tickTransactions.releaseLock();
             }
-            transactions = filteredTransactions;
-        }
-        // filter transactions based on ranges
-        if (ranges.isObject())
-        {
-            Json::Value rangedTransactions(Json::arrayValue);
-            for (unsigned int i = 0; i < transactions.size(); i++)
+            for (auto &buf : matchedBufs)
             {
-                Json::Value tx = transactions[i];
-                bool match = true;
-                for (const auto &key : ranges.getMemberNames())
+                transactions.append(HttpUtils::transactionToJson(reinterpret_cast<Transaction *>(buf.data())));
+            }
+
+            // filter transactions based on filters
+            if (filters.isObject())
+            {
+                Json::Value filteredTransactions(Json::arrayValue);
+                for (unsigned int i = 0; i < transactions.size(); i++)
                 {
-                    if (tx.isMember(key))
+                    Json::Value tx = transactions[i];
+                    bool match = true;
+                    for (const auto &key : filters.getMemberNames())
                     {
-                        Json::Value range = ranges[key];
-                        if (range.isObject())
+                        if (tx.isMember(key))
                         {
-                            if (range.isMember("lt"))
+                            if (tx[key].asString() != filters[key].asString())
                             {
-                                if (!(stoull(tx[key].asString()) < stoull(range["lt"].asString())))
-                                {
-                                    match = false;
-                                    break;
-                                }
-                            }
-                            if (range.isMember("gt"))
-                            {
-                                if (!(stoull(tx[key].asString()) > stoull(range["gt"].asString())))
-                                {
-                                    match = false;
-                                    break;
-                                }
-                            }
-                            if (range.isMember("lte"))
-                            {
-                                if (!(stoull(tx[key].asString()) <= stoull(range["lte"].asString())))
-                                {
-                                    match = false;
-                                    break;
-                                }
-                            }
-                            if (range.isMember("gte"))
-                            {
-                                if (!(stoull(tx[key].asString()) >= stoull(range["gte"].asString())))
-                                {
-                                    match = false;
-                                    break;
-                                }
+                                match = false;
+                                break;
                             }
                         }
                     }
+                    if (match)
+                    {
+                        filteredTransactions.append(tx);
+                    }
                 }
-                if (match)
+                transactions = filteredTransactions;
+            }
+            // filter transactions based on ranges
+            if (ranges.isObject())
+            {
+                Json::Value rangedTransactions(Json::arrayValue);
+                for (unsigned int i = 0; i < transactions.size(); i++)
                 {
-                    rangedTransactions.append(tx);
+                    Json::Value tx = transactions[i];
+                    bool match = true;
+                    for (const auto &key : ranges.getMemberNames())
+                    {
+                        if (tx.isMember(key))
+                        {
+                            Json::Value range = ranges[key];
+                            if (range.isObject())
+                            {
+                                if (range.isMember("lt"))
+                                {
+                                    if (!(stoull(tx[key].asString()) < stoull(range["lt"].asString())))
+                                    {
+                                        match = false;
+                                        break;
+                                    }
+                                }
+                                if (range.isMember("gt"))
+                                {
+                                    if (!(stoull(tx[key].asString()) > stoull(range["gt"].asString())))
+                                    {
+                                        match = false;
+                                        break;
+                                    }
+                                }
+                                if (range.isMember("lte"))
+                                {
+                                    if (!(stoull(tx[key].asString()) <= stoull(range["lte"].asString())))
+                                    {
+                                        match = false;
+                                        break;
+                                    }
+                                }
+                                if (range.isMember("gte"))
+                                {
+                                    if (!(stoull(tx[key].asString()) >= stoull(range["gte"].asString())))
+                                    {
+                                        match = false;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (match)
+                    {
+                        rangedTransactions.append(tx);
+                    }
                 }
+                transactions = rangedTransactions;
             }
-            transactions = rangedTransactions;
-        }
-        // apply pagination
-        if (pagination.isObject())
-        {
-            unsigned int offset = 0;
-            unsigned int size = 0;
-            if (pagination.isMember("offset"))
+            // apply pagination
+            if (pagination.isObject())
             {
-                offset = pagination["offset"].asUInt64();
+                unsigned int offset = 0;
+                unsigned int size = 0;
+                if (pagination.isMember("offset"))
+                {
+                    offset = pagination["offset"].asUInt64();
+                }
+                offset = std::min(offset, (unsigned int)10000);
+                if (pagination.isMember("size"))
+                {
+                    size = pagination["size"].asUInt64();
+                }
+                else
+                {
+                    size = 10;
+                }
+                size = std::min(size, (unsigned int)1000);
+                Json::Value paginatedTransactions(Json::arrayValue);
+                for (unsigned int i = offset; i < transactions.size() && i < offset + size; i++)
+                {
+                    paginatedTransactions.append(transactions[i]);
+                }
+                transactions = paginatedTransactions;
             }
-            offset = std::min(offset, (unsigned int)10000);
-            if (pagination.isMember("size"))
-            {
-                size = pagination["size"].asUInt64();
-            } else
-            {
-                size = 10;
-            }
-            size = std::min(size, (unsigned int)1000);
-            Json::Value paginatedTransactions(Json::arrayValue);
-            for (unsigned int i = offset; i < transactions.size() && i < offset + size; i++)
-            {
-                paginatedTransactions.append(transactions[i]);
-            }
-            transactions = paginatedTransactions;
-        }
 
-        result["transactions"] = transactions;
-        result["validForTick"] = 0;
-        result["hits"]["total"] = transactions.size();
-        result["hits"]["from"] = 0;
-        result["hits"]["size"] = transactions.size();
-        auto resp = HttpResponse::newHttpJsonResponse(result);
-        cb(resp);
-        } catch (const std::exception &e)
+            result["transactions"] = transactions;
+            result["validForTick"] = 0;
+            result["hits"]["total"] = transactions.size();
+            result["hits"]["from"] = 0;
+            result["hits"]["size"] = transactions.size();
+            auto resp = HttpResponse::newHttpJsonResponse(result);
+            cb(resp);
+        }
+        catch (const std::exception &e)
         {
             Json::Value result;
             result["code"] = -1;
@@ -518,25 +573,27 @@ class RpcQueryV2Controller : public HttpController<RpcQueryV2Controller>
         }
 
         Json::Value transactions(Json::arrayValue);
-        TickStorage::transactionsDigestAccess.acquireLock();
+        ts.tickTransactions.acquireLock();
+        unsigned long long *offsets = ts.tickTransactionOffsets.getByTickInCurrentEpoch(tickNumber);
+        std::vector<std::vector<unsigned char>> txBufs;
+        txBufs.reserve(NUMBER_OF_TRANSACTIONS_PER_TICK);
         for (unsigned int i = 0; i < NUMBER_OF_TRANSACTIONS_PER_TICK; i++)
         {
-            m256i &txDigest = localTickData.transactionDigests[i];
-            if (isZero(txDigest))
+            if (isZero(localTickData.transactionDigests[i]) || !offsets[i])
             {
                 continue;
             }
-
-            const Transaction *transaction = TickStorage::transactionsDigestAccess.findTransaction(txDigest);
-            if (!transaction)
-            {
-                continue;
-            }
-
-            Json::Value txJson = HttpUtils::transactionToJson((Transaction *)transaction);
-            transactions.append(txJson);
+            Transaction *txPtr = ts.tickTransactions(offsets[i]);
+            const unsigned int txTotalSize = txPtr->totalSize();
+            txBufs.emplace_back(txTotalSize);
+            copyMem(txBufs.back().data(), txPtr, txTotalSize);
         }
-        TickStorage::transactionsDigestAccess.releaseLock();
+        ts.tickTransactions.releaseLock();
+
+        for (auto &buf : txBufs)
+        {
+            transactions.append(HttpUtils::transactionToJson(reinterpret_cast<Transaction *>(buf.data())));
+        }
         result["transactions"] = transactions;
         auto resp = HttpResponse::newHttpJsonResponse(result);
         cb(resp);
