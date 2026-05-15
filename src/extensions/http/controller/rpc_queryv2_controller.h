@@ -78,13 +78,13 @@ class RpcQueryV2Controller : public HttpController<RpcQueryV2Controller>
 {
   public:
     METHOD_LIST_BEGIN
-    ADD_METHOD_TO(RpcQueryV2Controller::getComputorListsForEpoch, "/getComputorListsForEpoch", Post);
-    ADD_METHOD_TO(RpcQueryV2Controller::getLastProcessedTick, "/getLastProcessedTick", Get);
-    ADD_METHOD_TO(RpcQueryV2Controller::getProcessedTickIntervals, "/getProcessedTickIntervals", Get);
-    ADD_METHOD_TO(RpcQueryV2Controller::getTickData, "/getTickData", Post, "RpcQueryV2::MiddleWare::TickNumberVerifier");
-    ADD_METHOD_TO(RpcQueryV2Controller::getTransactionByHash, "/getTransactionByHash", Post);
-    ADD_METHOD_TO(RpcQueryV2Controller::getTransactionsForIdentity, "/getTransactionsForIdentity", Post);
-    ADD_METHOD_TO(RpcQueryV2Controller::getTransactionsForTick, "/getTransactionsForTick", Post, "RpcQueryV2::MiddleWare::TickNumberVerifier");
+    ADD_METHOD_TO(RpcQueryV2Controller::getComputorListsForEpoch, "/query/v1/getComputorListsForEpoch", Post);
+    ADD_METHOD_TO(RpcQueryV2Controller::getLastProcessedTick, "/query/v1/getLastProcessedTick", Get);
+    ADD_METHOD_TO(RpcQueryV2Controller::getProcessedTickIntervals, "/query/v1/getProcessedTickIntervals", Get);
+    ADD_METHOD_TO(RpcQueryV2Controller::getTickData, "/query/v1/getTickData", Post, "RpcQueryV2::MiddleWare::TickNumberVerifier");
+    ADD_METHOD_TO(RpcQueryV2Controller::getTransactionByHash, "/query/v1/getTransactionByHash", Post);
+    ADD_METHOD_TO(RpcQueryV2Controller::getTransactionsForIdentity, "/query/v1/getTransactionsForIdentity", Post);
+    ADD_METHOD_TO(RpcQueryV2Controller::getTransactionsForTick, "/query/v1/getTransactionsForTick", Post, "RpcQueryV2::MiddleWare::TickNumberVerifier");
     METHOD_LIST_END
 
     inline void getComputorListsForEpoch(const HttpRequestPtr &req,
