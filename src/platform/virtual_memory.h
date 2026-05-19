@@ -9,6 +9,7 @@
 
 #include "four_q.h"
 #include "kangaroo_twelve.h"
+#include <lib/platform_common/sleep.h>
 
 template <class T>
 inline constexpr const T& max(const T& left, const T& right)
@@ -21,6 +22,10 @@ inline constexpr const T& min(const T& left, const T& right)
 {
     return (left < right) ? left : right;
 }
+
+// bounded retry: 100ms, 200ms, 400ms, 800ms, 1600ms (~3.1s max)
+static constexpr int SWAPVM_IO_MAX_ATTEMPTS = 5;
+static constexpr unsigned int SWAPVM_IO_INITIAL_DELAY_MS = 100;
 
 // an util to use disk as RAM to reduce hardware requirement for qubic core node
 // this VirtualMemory doesn't (yet) support amend operation. That means data stay persisted once they are written
@@ -722,18 +727,41 @@ private:
         }
         unsigned char *pageBuffer = (unsigned char*)cache[cache_idx];
 
-#if defined(NO_UEFI) && !defined(REAL_NODE)
-        auto sz = save(pageName, pageSize, (unsigned char*)pageBuffer, pageDir);
-#else
-        auto sz = save(pageName, pageSize, (unsigned char*)pageBuffer, pageDir);
-#endif
+        // bounded retry on save() failure
+        unsigned long long sz = 0;
+        unsigned int delayMs = SWAPVM_IO_INITIAL_DELAY_MS;
+        for (int attempt = 0; attempt < SWAPVM_IO_MAX_ATTEMPTS; attempt++)
+        {
+            sz = save(pageName, pageSize, (unsigned char*)pageBuffer, pageDir);
+            if (sz == pageSize)
+                break;
 
-#if !defined(NDEBUG)
+            setText(message, L"swapVM writePageToDisk failed (attempt ");
+            appendNumber(message, (unsigned long long)(attempt + 1), false);
+            appendText(message, L"/");
+            appendNumber(message, (unsigned long long)SWAPVM_IO_MAX_ATTEMPTS, false);
+            appendText(message, L") page ");
+            appendNumber(message, pageId, true);
+            logToConsole(message);
+
+            if (attempt + 1 < SWAPVM_IO_MAX_ATTEMPTS)
+            {
+                sleepMilliseconds(delayMs);
+                delayMs *= 2;
+            }
+        }
+
         if (sz != pageSize)
         {
-            addDebugMessage(L"Failed to store virtualMemory to disk. Old data maybe lost");
+            setText(message, L"Fatal: swapVM writePageToDisk exhausted retries | page ");
+            appendNumber(message, pageId, true);
+            appendText(message, L" | prefix ");
+            appendText(message, pageDir);
+            logToConsole(message);
+            exit(1);
         }
-        else
+
+#if !defined(NDEBUG)
         {
             CHAR16 debugMsg[128];
             unsigned long long tmp = prefixName;
@@ -749,6 +777,7 @@ private:
         }
 #endif
 
+        // only mark written on confirmed success
         isPageWrittenToDisk[pageId] = true;
     }
 
@@ -782,8 +811,30 @@ private:
         unsigned long long sz = 0;
         if (isPageWrittenToDisk[pageId])
         {
-            sz = load(pageName, pageSize, (unsigned char*)cache[cache_page_id], pageDir);
-        } else
+            // bounded retry on load() failure
+            unsigned int delayMs = SWAPVM_IO_INITIAL_DELAY_MS;
+            for (int attempt = 0; attempt < SWAPVM_IO_MAX_ATTEMPTS; attempt++)
+            {
+                sz = load(pageName, pageSize, (unsigned char*)cache[cache_page_id], pageDir);
+                if (sz == pageSize)
+                    break;
+
+                setText(message, L"swapVM loadPage failed (attempt ");
+                appendNumber(message, (unsigned long long)(attempt + 1), false);
+                appendText(message, L"/");
+                appendNumber(message, (unsigned long long)SWAPVM_IO_MAX_ATTEMPTS, false);
+                appendText(message, L") page ");
+                appendNumber(message, pageId, true);
+                logToConsole(message);
+
+                if (attempt + 1 < SWAPVM_IO_MAX_ATTEMPTS)
+                {
+                    sleepMilliseconds(delayMs);
+                    delayMs *= 2;
+                }
+            }
+        }
+        else
         {
             sz = pageSize;
             setMem(cache[cache_page_id], pageSize, 0);
