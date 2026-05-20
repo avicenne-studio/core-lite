@@ -335,7 +335,7 @@ static bool loadContractExecFeeFiles(CHAR16* directory = NULL, bool loadAccumula
 static bool saveRevenueComponents(CHAR16* directory = NULL);
 
 #if ENABLED_LOGGING
-#define PAUSE_BEFORE_CLEAR_MEMORY 1 // Requiring operators to press F10 to clear memory (before switching epoch)
+#define PAUSE_BEFORE_CLEAR_MEMORY 0 // Testnet: auto-transition epochs without waiting for F10
 #else
 #define PAUSE_BEFORE_CLEAR_MEMORY 0
 #endif
