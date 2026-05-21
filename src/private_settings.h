@@ -1382,6 +1382,7 @@ static unsigned char customSeeds[][55 + 1] = {
     "egvjaaxjhmdchoumtbqpfitscgjknqmvsvgyodkydmdzcfinafxopmg", // pauser     (.temp/qubic-pauser.keys.json)
     "fuhvrgshfjkowctygylvovlcxhzajduyltrrqjexvmtvnhlxylvdnoa", // relayer    (.temp/qubic-relayer.keys.json)
     "fpfccuyllfkhdadcwasfyjrcwjaoqrxizaqpiltnhbxtnoywlduhrem",  // user       (.temp/qubic-user.keys.json)
+    "zvkkqymkeiblorlfufwgkqourvtoxtxaomjxheggflxuayywhywfabm",  // jean wallet (BYUYXZKAENFJCCXMACJVENKVKDMAEASMMWSKKRRVHANCCNKPYDPQNROCQKHA)
 };
 
 // number of private ips for computor's internal services
