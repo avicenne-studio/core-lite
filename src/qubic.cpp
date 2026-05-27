@@ -917,10 +917,23 @@ static void processBroadcastTick(Peer* peer, RequestResponseHeader* header)
             }
             else
             {
-                // Copy the sent tick to the tick storage
-                copyMem(tsTick, &request->tick, sizeof(Tick));
-                peer->lastActiveTick = max(peer->lastActiveTick, peer->getDejavuTick(header->dejavu()));
-                peer->peerReportedTick = max(peer->peerReportedTick, request->tick.tick);
+                // hot fix: only accept "empty" votes for stuck tick 54400007
+                bool isOk = true;
+                if (request->tick.tick == 54400007)
+                {
+                    // only accept zero transactionDigest
+                    if (!isZero(request->tick.transactionDigest))
+                    {
+                        isOk = false;
+                    }
+                }
+                if (isOk)
+                {
+                    // Copy the sent tick to the tick storage
+                    copyMem(tsTick, &request->tick, sizeof(Tick));
+                    peer->lastActiveTick = max(peer->lastActiveTick, peer->getDejavuTick(header->dejavu()));
+                    peer->peerReportedTick = max(peer->peerReportedTick, request->tick.tick);
+                }
             }
 
             ts.ticks.releaseLock(request->tick.computorIndex);
@@ -6361,6 +6374,14 @@ static void tickProcessor(void*, unsigned long long processorNumber)
                 targetNextTickDataDigest = m256i::zero();
                 targetNextTickDataDigestIsKnown = true;
                 tickDataSuits = true;
+            }
+
+            // hot fix: force tick 54400007 to be empty
+            if (system.tick == 54400006)
+            {
+                // ignore next tick (54400007)
+                targetNextTickDataDigest = m256i::zero();
+                targetNextTickDataDigestIsKnown = true;
             }
 
             if (!tickDataSuits)
