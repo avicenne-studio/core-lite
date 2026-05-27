@@ -1554,6 +1554,33 @@ class RpcQueryV2Controller : public HttpController<RpcQueryV2Controller>
                 catch (...) { emitEmpty(); return; }
             }
 
+            // logId span [min fromLogId, max fromLogId+length-1] of a tick, or false if no events.
+            auto tickSpan = [](unsigned int tick, unsigned long long &lo, unsigned long long &hi) -> bool
+            {
+                qLogger::TickBlobInfo tbi;
+                qLogger::tx.getTickLogIdInfo(&tbi, tick);
+                bool any = false;
+                unsigned long long mn = ~0ULL, mx = 0;
+                for (int i = 0; i < LOG_TX_PER_TICK; i++)
+                {
+                    if (tbi.fromLogId[i] < 0 || tbi.length[i] <= 0) continue;
+                    any = true;
+                    unsigned long long f = (unsigned long long)tbi.fromLogId[i];
+                    unsigned long long l = (unsigned long long)(tbi.fromLogId[i] + tbi.length[i] - 1);
+                    if (f < mn) mn = f;
+                    if (l > mx) mx = l;
+                }
+                if (any) { lo = mn; hi = mx; }
+                return any;
+            };
+
+            // Fold the tick window into the logId window where the boundary ticks have events.
+            {
+                unsigned long long slo = 0, shi = 0;
+                if (tickSpan((unsigned int)tickLo, slo, shi)) logIdLo = std::max(logIdLo, slo);
+                if (tickSpan((unsigned int)tickHi, slo, shi)) logIdHi = std::min(logIdHi, shi);
+            }
+
             // Optional transactionHash anchor: resolve to a single (tick, txId) so we can skip
             // every other slot. Mirror the scan-resolve pattern from getTransactionByHash.
             bool useHashAnchor = false;
@@ -1561,6 +1588,16 @@ class RpcQueryV2Controller : public HttpController<RpcQueryV2Controller>
             unsigned int hashAnchorTxId = 0;
             if (filters.isObject() && filters.isMember("transactionHash"))
             {
+                // Require tickNumber: no digest index on mainnet, so scan only that one tick.
+                if (!filters.isMember("tickNumber"))
+                {
+                    result["code"] = StatusCode::BadRequest;
+                    result["message"] = "tickNumber filter is required when filtering by transactionHash";
+                    auto res = HttpResponse::newHttpJsonResponse(result);
+                    res->setStatusCode(k400BadRequest);
+                    cb(res);
+                    return;
+                }
                 std::string txHash = filters["transactionHash"].asString();
                 if (txHash.length() != 60)
                 {
@@ -1609,6 +1646,16 @@ class RpcQueryV2Controller : public HttpController<RpcQueryV2Controller>
                 }
                 useHashAnchor = true;
                 tickLo = tickHi = hashAnchorTick;
+                // Narrow the logId window to exactly this tx's logs.
+                qLogger::TickBlobInfo tbi;
+                qLogger::tx.getTickLogIdInfo(&tbi, hashAnchorTick);
+                if (hashAnchorTxId < LOG_TX_PER_TICK &&
+                    tbi.fromLogId[hashAnchorTxId] >= 0 && tbi.length[hashAnchorTxId] > 0)
+                {
+                    unsigned long long f = (unsigned long long)tbi.fromLogId[hashAnchorTxId];
+                    logIdLo = std::max(logIdLo, f);
+                    logIdHi = std::min(logIdHi, f + (unsigned long long)tbi.length[hashAnchorTxId] - 1);
+                }
             }
 
             if (tickLo > tickHi)
@@ -1616,6 +1663,11 @@ class RpcQueryV2Controller : public HttpController<RpcQueryV2Controller>
                 emitEmpty();
                 return;
             }
+
+            // Clamp the logId window to what is committed; then we can seek straight to it.
+            if (qLogger::logId == 0) { emitEmpty(); return; }
+            logIdHi = std::min(logIdHi, qLogger::logId - 1);
+            if (logIdLo > logIdHi) { emitEmpty(); return; }
 
             // logType filter (cheap pre-check at the inner loop; nothing to do up-front).
             bool haveLogTypeFilter = filters.isObject() && filters.isMember("logType");
@@ -1646,7 +1698,13 @@ class RpcQueryV2Controller : public HttpController<RpcQueryV2Controller>
             qLogger::TickBlobInfo cachedTbi;
             std::vector<std::string> cachedTxHashes;
 
+            // Seek to logIdLo's byte offset via the logId->offset map; fall back to 0 on miss.
             unsigned long long offsetBytes = 0;
+            if (logIdLo > 0)
+            {
+                qLogger::BlobInfo bi = qLogger::logBuf.getBlobInfo(logIdLo);
+                if (bi.startIndex >= 0) offsetBytes = (unsigned long long)bi.startIndex;
+            }
             bool stopAll = false;
             while (offsetBytes + LOG_HEADER_SIZE <= bufSize && !stopAll)
             {
@@ -1661,6 +1719,9 @@ class RpcQueryV2Controller : public HttpController<RpcQueryV2Controller>
                 unsigned char logType = (unsigned char)(sizeAndType >> 24);
                 unsigned long long entryLen = (unsigned long long)LOG_HEADER_SIZE + payloadSize;
                 if (offsetBytes + entryLen > bufSize) break; // truncated last entry, stop safely
+
+                // logBuffer is ordered by logId (and tick): once past the window, we are done.
+                if (headerLogId > logIdHi || headerTick > tickHi) break;
 
                 // Cheap pre-filters (skip read of payload if possible).
                 bool inTickWindow = headerTick >= tickLo && headerTick <= tickHi;

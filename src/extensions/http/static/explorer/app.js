@@ -1028,8 +1028,16 @@ function logPayloadPreview(e) {
 window.__showTxLogs = async function(hash, tick) {
   openModal(`Event Logs · ${fmt.truncId(hash)}`, '<p class="muted">› loading…</p>');
   const body = () => document.querySelector('#modal-root .modal-body');
-  const filters = {transactionHash: hash};
-  if (tick != null) filters.tickNumber = String(tick); // bound backend anchor scan to one tick
+  // backend requires a tick with transactionHash (no digest index); resolve it if missing.
+  if (tick == null) {
+    try { const t = await api.tx(hash); tick = (t && t.tickNumber != null) ? t.tickNumber : null; }
+    catch (_) {}
+  }
+  if (tick == null) {
+    body().innerHTML = '<div class="empty-state">cannot resolve tick for this transaction</div>';
+    return;
+  }
+  const filters = {transactionHash: hash, tickNumber: String(tick)};
   let r;
   try { r = await api.logs(0, 1000, {filters}); }
   catch (e) { body().innerHTML = `<div class="empty-state">error · ${fmt.esc(e.message || e)}</div>`; return; }
