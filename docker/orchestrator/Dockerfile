@@ -17,6 +17,11 @@ RUN apt-get update && apt-get install -y \
     uuid-dev \
     zlib1g-dev \
     libssl-dev \
+    libboost-stacktrace-dev \
+    libzstd-dev \
+    libfmt-dev \
+    liblzo2-dev \
+    liblz4-dev \
     git \
     && rm -rf /var/lib/apt/lists/*
 
@@ -60,6 +65,7 @@ RUN apt-get update && apt-get install -y \
     libjsoncpp25 \
     libhiredis1.1.0 \
     libssl3 \
+    libzstd1 \
     openssh-client \
     rsync \
     curl \
