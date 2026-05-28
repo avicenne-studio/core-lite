@@ -156,6 +156,67 @@ public:
         return sig;
     }
 
+    // Derive a deterministic key pair from a u64 seed.
+    struct OracleKey {
+        id subseed;
+        id publicKey;
+    };
+    static OracleKey makeOracleKey(uint64 seed)
+    {
+        OracleKey k;
+        k.subseed = id(seed, seed ^ 0xDEADBEEFULL, seed ^ 0xCAFEBABEULL, seed ^ 0xFEEDFACEULL);
+        id privateKey;
+        getPrivateKey(k.subseed.m256i_u8, privateKey.m256i_u8);
+        getPublicKey(privateKey.m256i_u8, k.publicKey.m256i_u8);
+        return k;
+    }
+
+    // Create a cryptographically valid SignatureData for the given order.
+    // The signature is over the same K12(QSBOrderMessage) digest the contract verifies.
+    QSB::SignatureData createOrderSignature(const OracleKey& key, const QSB::Order& order) const
+    {
+        // Build order message the same way the contract does
+        QSBOrderMessage msg;
+        QSB::OrderHash tmpHash;
+        setMemory(msg, 0);
+        msg.protocolNameLen = 11;
+        msg.protocolName.set(0, 81);  msg.protocolName.set(1, 117); msg.protocolName.set(2, 98);
+        msg.protocolName.set(3, 105); msg.protocolName.set(4, 99);  msg.protocolName.set(5, 66);
+        msg.protocolName.set(6, 114); msg.protocolName.set(7, 105); msg.protocolName.set(8, 100);
+        msg.protocolName.set(9, 103); msg.protocolName.set(10, 101);
+        msg.protocolVersionLen = 1;
+        msg.protocolVersion.set(0, 49);
+        msg.contractAddress.set(0, (uint8)(QSB_CONTRACT_INDEX & 0xFF));
+        msg.contractAddress.set(1, (uint8)((QSB_CONTRACT_INDEX >> 8) & 0xFF));
+        msg.networkIn = order.networkIn;
+        msg.networkOut = order.networkOut;
+        for (uint32 i = 0; i < 32; ++i) msg.tokenIn.set(i, order.tokenIn.get(i));
+        for (uint32 i = 0; i < 32; ++i) msg.tokenOut.set(i, order.tokenOut.get(i));
+        tmpHash.setMem(order.fromAddress);
+        for (uint32 i = 0; i < 32; ++i) msg.fromAddress.set(i, tmpHash.get(i));
+        tmpHash.setMem(order.toAddress);
+        for (uint32 i = 0; i < 32; ++i) msg.toAddress.set(i, tmpHash.get(i));
+        msg.amount = order.amount;
+        msg.relayerFee = order.relayerFee;
+        for (uint32 i = 0; i < 32; ++i) msg.nonce.set(i, order.nonce.get(i));
+        msg.orderEra = order.orderEra;
+
+        m256i digest;
+        KangarooTwelve(&msg, sizeof(msg), &digest, sizeof(digest));
+
+        // getPrivateKey/sign require non-const pointers — copy to local buffers
+        id subseedCopy = key.subseed;
+        id pubKeyCopy = key.publicKey;
+        id privateKey;
+        getPrivateKey(subseedCopy.m256i_u8, privateKey.m256i_u8);
+
+        QSB::SignatureData sig;
+        sig.signer = key.publicKey;
+        sign(subseedCopy.m256i_u8, pubKeyCopy.m256i_u8, digest.m256i_u8,
+             reinterpret_cast<unsigned char*>(&sig.signature));
+        return sig;
+    }
+
     // Helper to create a zero-initialized address array
     static Array<uint8, 64> createZeroAddress()
     {
@@ -707,31 +768,54 @@ TEST(ContractTestingQSB, TestFilledOrders_RingBufferOverwritesOldEntries)
 {
     ContractTestingQSB test;
 
-    // Artificially mark more orders as filled than the ring capacity
-    // to ensure oldest entries are overwritten while newer ones remain.
-    for (uint32 i = 0; i < QSB_MAX_FILLED_ORDERS + 1; ++i)
+    // Fill exactly one full buffer: entries 0..QSB_MAX_FILLED_ORDERS-1
+    for (uint32 i = 0; i < QSB_MAX_FILLED_ORDERS; ++i)
     {
         QSB::OrderHash hash;
         setMemory(hash, 0);
-        // Encode i into the first two bytes to avoid collisions when
-        // QSB_MAX_FILLED_ORDERS exceeds 255.
         hash.set(0, (uint8)(i & 0xff));
         hash.set(1, (uint8)((i >> 8) & 0xff));
         test.getState()->forceMarkOrderFilled(hash);
     }
 
-    // Hash for 0 should have been overwritten (only last QSB_MAX_FILLED_ORDERS kept)
+    // One more entry triggers era transition: hash 0 moves to filledOrdersPrev
+    {
+        QSB::OrderHash hash;
+        setMemory(hash, 0);
+        hash.set(0, (uint8)(QSB_MAX_FILLED_ORDERS & 0xff));
+        hash.set(1, (uint8)((QSB_MAX_FILLED_ORDERS >> 8) & 0xff));
+        test.getState()->forceMarkOrderFilled(hash);
+    }
+    EXPECT_EQ(test.getState()->orderEra, 1u);
+
+    // Hash 0 is still found — it lives in filledOrdersPrev (grace window)
     QSB::OrderHash hash0;
     setMemory(hash0, 0);
-    hash0.set(1, 0);
     QSB::IsOrderFilled_output out0 = test.isOrderFilled(hash0);
-    EXPECT_FALSE((bool)out0.filled);
+    EXPECT_TRUE((bool)out0.filled);
 
-    // Hash for the last inserted nonce (QSB_MAX_FILLED_ORDERS) should be present
+    // Fill a second full buffer to push hash 0 out of filledOrdersPrev too
+    for (uint32 i = QSB_MAX_FILLED_ORDERS + 1; i < QSB_MAX_FILLED_ORDERS * 2; ++i)
+    {
+        QSB::OrderHash hash;
+        setMemory(hash, 0);
+        hash.set(0, (uint8)(i & 0xff));
+        hash.set(1, (uint8)((i >> 8) & 0xff));
+        hash.set(2, 1); // round tag to avoid hash collisions
+        test.getState()->forceMarkOrderFilled(hash);
+    }
+    EXPECT_EQ(test.getState()->orderEra, 2u);
+
+    // Now hash 0 is gone from both buffers
+    QSB::IsOrderFilled_output out0after = test.isOrderFilled(hash0);
+    EXPECT_FALSE((bool)out0after.filled);
+
+    // The last inserted hash (from round 2) is still present
     QSB::OrderHash hashLast;
     setMemory(hashLast, 0);
-    hashLast.set(0, (uint8)(QSB_MAX_FILLED_ORDERS & 0xff));
-    hashLast.set(1, (uint8)((QSB_MAX_FILLED_ORDERS >> 8) & 0xff));
+    hashLast.set(0, (uint8)((QSB_MAX_FILLED_ORDERS * 2 - 1) & 0xff));
+    hashLast.set(1, (uint8)(((QSB_MAX_FILLED_ORDERS * 2 - 1) >> 8) & 0xff));
+    hashLast.set(2, 1);
     QSB::IsOrderFilled_output outLast = test.isOrderFilled(hashLast);
     EXPECT_TRUE((bool)outLast.filled);
 }
@@ -1576,7 +1660,7 @@ TEST(ContractTestingQSB, TestUnlock_FailsWhenEraIsTooOld)
     }
     EXPECT_EQ(test.getState()->orderEra, 3u);
 
-    // era=1 is rejected (current=3, only era=3 accepted — no grace period)
+    // era=1 is rejected (current=3, grace window only covers era=2)
     QSB::Order orderOld = ContractTestingQSB::createTestOrderFromU32Nonce(USER1, USER2, 100, 10, 99, 1);
     // Fund contract
     increaseEnergy(USER1, 100);
@@ -1588,6 +1672,108 @@ TEST(ContractTestingQSB, TestUnlock_FailsWhenEraIsTooOld)
 
     QSB::Unlock_output unlockOld = test.unlock(USER1, orderOld, 1, sigs);
     EXPECT_FALSE(unlockOld.success); // fails due to era mismatch
+}
+
+// Helper: fill the ring buffer once to advance era by 1
+static void advanceEra(ContractTestingQSB& test, uint32 era)
+{
+    for (uint32 round = 0; round < era; ++round)
+    {
+        for (uint32 i = 0; i < QSB_MAX_FILLED_ORDERS; ++i)
+        {
+            QSB::OrderHash hash;
+            setMemory(hash, 0);
+            hash.set(0, (uint8)(i & 0xFF));
+            hash.set(1, (uint8)((i >> 8) & 0xFF));
+            hash.set(2, (uint8)(round & 0xFF));
+            test.getState()->forceMarkOrderFilled(hash);
+        }
+    }
+}
+
+// Unlock with era N-1 succeeds immediately after a ring-buffer wrap (grace window).
+TEST(ContractTestingQSB, TestUnlock_PreviousEraAccepted)
+{
+    ContractTestingQSB test;
+    increaseEnergy(ADMIN, 1);
+    auto oracle = ContractTestingQSB::makeOracleKey(1001);
+    increaseEnergy(oracle.publicKey, 1);
+    test.addRole(ADMIN, (uint8)QSB::Role::Oracle, oracle.publicKey);
+    test.editOracleThreshold(ADMIN, 1);
+
+    uint64 amount = 10000;
+    increaseEnergy(USER1, amount);
+    test.lock(USER1, amount, 0, 1, 1, ContractTestingQSB::createZeroAddress(), amount);
+
+    // Advance to era 1
+    advanceEra(test, 1);
+    EXPECT_EQ(test.getState()->orderEra, 1u);
+
+    // Order signed with era=0 (previous era) should still succeed
+    QSB::Order order = ContractTestingQSB::createTestOrderFromU32Nonce(USER1, USER2, amount, 10, 42, 0);
+    Array<QSB::SignatureData, QSB_MAX_ORACLES> sigs;
+    setMemory(sigs, 0);
+    sigs.set(0, test.createOrderSignature(oracle, order));
+    QSB::Unlock_output result = test.unlock(USER1, order, 1, sigs);
+    EXPECT_TRUE(result.success);
+}
+
+// Unlock with era N-2 is rejected even with the grace window.
+TEST(ContractTestingQSB, TestUnlock_TwoErasAgoRejected)
+{
+    ContractTestingQSB test;
+    increaseEnergy(ADMIN, 1);
+    auto oracle = ContractTestingQSB::makeOracleKey(1002);
+    increaseEnergy(oracle.publicKey, 1);
+    test.addRole(ADMIN, (uint8)QSB::Role::Oracle, oracle.publicKey);
+    test.editOracleThreshold(ADMIN, 1);
+
+    uint64 amount = 10000;
+    increaseEnergy(USER1, amount);
+    test.lock(USER1, amount, 0, 1, 1, ContractTestingQSB::createZeroAddress(), amount);
+
+    // Advance to era 2
+    advanceEra(test, 2);
+    EXPECT_EQ(test.getState()->orderEra, 2u);
+
+    // Order signed with era=0 (two eras ago) is rejected (era check fails before sig check)
+    QSB::Order order = ContractTestingQSB::createTestOrderFromU32Nonce(USER1, USER2, amount, 10, 42, 0);
+    Array<QSB::SignatureData, QSB_MAX_ORACLES> sigs;
+    setMemory(sigs, 0);
+    sigs.set(0, test.createOrderSignature(oracle, order));
+    QSB::Unlock_output result = test.unlock(USER1, order, 1, sigs);
+    EXPECT_FALSE(result.success);
+}
+
+// An order filled in era N-1 cannot be replayed in era N using the grace window.
+TEST(ContractTestingQSB, TestUnlock_NoReplayAfterEraTransition)
+{
+    ContractTestingQSB test;
+    increaseEnergy(ADMIN, 1);
+    auto oracle = ContractTestingQSB::makeOracleKey(1003);
+    increaseEnergy(oracle.publicKey, 1);
+    test.addRole(ADMIN, (uint8)QSB::Role::Oracle, oracle.publicKey);
+    test.editOracleThreshold(ADMIN, 1);
+
+    uint64 amount = 20000;
+    increaseEnergy(USER1, amount * 2);
+    test.lock(USER1, amount * 2, 0, 1, 1, ContractTestingQSB::createZeroAddress(), amount * 2);
+
+    // Fill the order in era 0
+    QSB::Order order = ContractTestingQSB::createTestOrderFromU32Nonce(USER1, USER2, amount, 10, 77, 0);
+    Array<QSB::SignatureData, QSB_MAX_ORACLES> sigs;
+    setMemory(sigs, 0);
+    sigs.set(0, test.createOrderSignature(oracle, order));
+    QSB::Unlock_output first = test.unlock(USER1, order, 1, sigs);
+    EXPECT_TRUE(first.success);
+
+    // Advance to era 1
+    advanceEra(test, 1);
+    EXPECT_EQ(test.getState()->orderEra, 1u);
+
+    // Replay attempt with same order (era=0 accepted by grace window) must fail — isOrderFilled blocks it
+    QSB::Unlock_output replay = test.unlock(USER1, order, 1, sigs);
+    EXPECT_FALSE(replay.success);
 }
 
 TEST(ContractTestingQSB, PrintStructSizes) {

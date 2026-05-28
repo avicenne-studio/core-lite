@@ -6,7 +6,7 @@ using namespace QPI;
 
 static constexpr uint32 QSB_MAX_ORACLES = 64;
 static constexpr uint32 QSB_MAX_PAUSERS = 32;
-static constexpr uint32 QSB_MAX_FILLED_ORDERS = 2048;
+static constexpr uint32 QSB_MAX_FILLED_ORDERS = 256; // QPI::Array requires power-of-2; 256 = 5x the ~50 max concurrent orders
 static constexpr uint32 QSB_MAX_LOCKED_ORDERS = 1024;
 static constexpr uint32 QSB_MAX_BPS_FEE = 1000;      // max 10% fee (1000 / 10000)
 static constexpr uint32 QSB_MAX_PROTOCOL_FEE = 100;  // max 100% of bps fee
@@ -508,6 +508,7 @@ public:
 		Array<RoleEntry, QSB_MAX_ORACLES> oracles;
 		Array<RoleEntry, QSB_MAX_PAUSERS> pausers;
 		Array<FilledOrderEntry, QSB_MAX_FILLED_ORDERS> filledOrders;
+		Array<FilledOrderEntry, QSB_MAX_FILLED_ORDERS> filledOrdersPrev;
 		Array<LockedOrderEntry, QSB_MAX_LOCKED_ORDERS> lockedOrders;
 		uint32 lastLockedOrdersNextOverwriteIdx;
 		uint32 lastFilledOrdersNextOverwriteIdx;
@@ -668,16 +669,37 @@ protected:
 		state.mut().lastFilledOrdersNextOverwriteIdx = j;
 		if (j == 0)
 		{
+			// On ring buffer wrap: preserve current buffer as prev, clear current, advance era.
+			state.mut().filledOrdersPrev = state.get().filledOrders;
+			setMemory(state.mut().filledOrders, 0);
 			state.mut().orderEra = state.get().orderEra + 1;
 		}
 	}
 
-	// Check whether an orderHash has already been filled
+	// Check whether an orderHash has already been filled (checks current and previous era buffers)
 	inline static bit isOrderFilled(const QPI::ContractState<StateData, CONTRACT_INDEX>& state, const OrderHash& hash, uint32 i, uint32 j, bool same, FilledOrderEntry& entry)
 	{
 		for (i = 0; i < state.get().filledOrders.capacity(); ++i)
 		{
 			entry = state.get().filledOrders.get(i);
+			if (!entry.used)
+				continue;
+
+			same = true;
+			for (j = 0; j < hash.capacity(); ++j)
+			{
+				if (entry.hash.get(j) != hash.get(j))
+				{
+					same = false;
+					break;
+				}
+			}
+			if (same)
+				return true;
+		}
+		for (i = 0; i < state.get().filledOrdersPrev.capacity(); ++i)
+		{
+			entry = state.get().filledOrdersPrev.get(i);
 			if (!entry.used)
 				continue;
 
@@ -1214,9 +1236,11 @@ public:
 			return;
 		}
 
-		// Era validation: reject orders whose era does not match the current era.
-		// This prevents replay attacks after the filledOrders ring buffer wraps.
-		if (input.order.orderEra != state.get().orderEra)
+		// Era validation: accept current era or the immediately previous era.
+		// Accepting era N-1 provides a grace window for in-flight orders signed just before
+		// a ring-buffer wrap, while isOrderFilled checks both buffers to prevent replays.
+		if (input.order.orderEra != state.get().orderEra &&
+			!(state.get().orderEra > 0 && input.order.orderEra == state.get().orderEra - 1))
 		{
 			locals.logMsg.reasonCode = QSBReasonEraMismatch;
 			LOG_INFO(locals.logMsg);
@@ -1989,6 +2013,7 @@ public:
 		setMemory(state.mut().oracles, 0);
 		setMemory(state.mut().pausers, 0);
 		setMemory(state.mut().filledOrders, 0);
+		setMemory(state.mut().filledOrdersPrev, 0);
 		setMemory(state.mut().lockedOrders, 0);
 
 		// Default fee configuration: no fees(it will be decided later)
