@@ -1763,13 +1763,13 @@ public:
 			qpi.transfer(qpi.invocator(), qpi.invocationReward());
 		}
 
-		if (!isAdminOrPauser(state, qpi.invocator(), 0))
+		if (!isAdmin(state, qpi.invocator()))
 		{
 			locals.logMsg._contractIndex = SELF_INDEX;
 			locals.logMsg._type = QSBLogUnpaused;
 			locals.logMsg.caller = qpi.invocator();
 			locals.logMsg.success = 0;
-			locals.logMsg.reasonCode = QSBReasonNotAdminOrPauser;
+			locals.logMsg.reasonCode = QSBReasonNotAdmin;
 			locals.logMsg._terminator = 0;
 			LOG_INFO(locals.logMsg);
 			return;

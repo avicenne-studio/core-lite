@@ -1110,19 +1110,35 @@ TEST(ContractTestingQSB, TestPause_ByPauser)
     test.getState()->checkPaused(true);
 }
 
-TEST(ContractTestingQSB, TestUnpause)
+TEST(ContractTestingQSB, TestUnpause_ByAdmin)
 {
     ContractTestingQSB test;
-    
-    // Bootstrap admin and pause
+
     increaseEnergy(ADMIN, 1);
     test.pause(ADMIN);
-    
-    // Now unpause
+
     QSB::Unpause_output output = test.unpause(ADMIN);
     EXPECT_TRUE(output.success);
-    
+
     test.getState()->checkPaused(false);
+}
+
+TEST(ContractTestingQSB, TestUnpause_FailsForPauser)
+{
+    ContractTestingQSB test;
+
+    increaseEnergy(ADMIN, 1);
+    increaseEnergy(PAUSER1, 1);
+
+    test.addRole(ADMIN, (uint8)QSB::Role::Pauser, PAUSER1);
+    test.pause(PAUSER1);
+    test.getState()->checkPaused(true);
+
+    // Pauser must not be able to cancel their own pause
+    QSB::Unpause_output output = test.unpause(PAUSER1);
+    EXPECT_FALSE(output.success);
+
+    test.getState()->checkPaused(true);
 }
 
 TEST(ContractTestingQSB, TestEditFeeParameters)
