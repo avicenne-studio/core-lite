@@ -969,18 +969,29 @@ TEST(ContractTestingQSB, TestOverrideLock_Success)
 TEST(ContractTestingQSB, TestOverrideLock_FailsWhenNotOriginalSender)
 {
     ContractTestingQSB test;
-    
+
     const uint64 amount = 1000000;
     const uint64 relayerFee = 10000;
     const uint32 nonce = 6;
-    
+
     // USER1 creates a lock
     increaseEnergy(USER1, amount);
     test.lock(USER1, amount, relayerFee, 1, nonce, ContractTestingQSB::createZeroAddress(), amount);
-    
+
     // USER2 tries to override - should fail
     QSB::OverrideLock_output overrideOutput = test.overrideLock(USER2, nonce, 5000, ContractTestingQSB::createZeroAddress());
     EXPECT_FALSE(overrideOutput.success);
+}
+
+TEST(ContractTestingQSB, TestOverrideLock_OrderNotFound)
+{
+    ContractTestingQSB test;
+
+    increaseEnergy(USER1, 1);
+
+    // Nonce 999 was never locked — should fail with OrderNotFound, not NonceUsed
+    QSB::OverrideLock_output output = test.overrideLock(USER1, 999, 0, ContractTestingQSB::createZeroAddress());
+    EXPECT_FALSE(output.success);
 }
 
 // ============================================================================
@@ -1065,18 +1076,66 @@ TEST(ContractTestingQSB, TestAddRole_Pauser)
     EXPECT_TRUE(output.success);
 }
 
+TEST(ContractTestingQSB, TestAddRole_InvalidRole)
+{
+    ContractTestingQSB test;
+    increaseEnergy(ADMIN, 1);
+
+    QSB::AddRole_output output = test.addRole(ADMIN, 99, USER1);
+    EXPECT_FALSE(output.success);
+
+    test.getState()->checkOracleCount(0);
+}
+
+TEST(ContractTestingQSB, TestAddRole_OracleFull)
+{
+    ContractTestingQSB test;
+    increaseEnergy(ADMIN, 1);
+
+    for (uint32_t i = 0; i < QSB_MAX_ORACLES; ++i)
+    {
+        id oracle(i + 1, 0, 0, 0);
+        QSB::AddRole_output out = test.addRole(ADMIN, (uint8)QSB::Role::Oracle, oracle);
+        EXPECT_TRUE(out.success);
+    }
+    test.getState()->checkOracleCount(QSB_MAX_ORACLES);
+
+    id extra(QSB_MAX_ORACLES + 1, 0, 0, 0);
+    QSB::AddRole_output output = test.addRole(ADMIN, (uint8)QSB::Role::Oracle, extra);
+    EXPECT_FALSE(output.success);
+
+    test.getState()->checkOracleCount(QSB_MAX_ORACLES);
+}
+
+TEST(ContractTestingQSB, TestAddRole_PauserFull)
+{
+    ContractTestingQSB test;
+    increaseEnergy(ADMIN, 1);
+
+    for (uint32_t i = 0; i < QSB_MAX_PAUSERS; ++i)
+    {
+        id pauser(i + 1, 0, 0, 0);
+        QSB::AddRole_output out = test.addRole(ADMIN, (uint8)QSB::Role::Pauser, pauser);
+        EXPECT_TRUE(out.success);
+    }
+
+    id extra(QSB_MAX_PAUSERS + 1, 0, 0, 0);
+    QSB::AddRole_output output = test.addRole(ADMIN, (uint8)QSB::Role::Pauser, extra);
+    EXPECT_FALSE(output.success);
+}
+
 TEST(ContractTestingQSB, TestRemoveRole_Oracle)
 {
     ContractTestingQSB test;
-    
+
     // Bootstrap admin and add oracle
     increaseEnergy(ADMIN, 1);
     test.addRole(ADMIN, (uint8)QSB::Role::Oracle, ORACLE1);
-    
+
     // Now remove it
     QSB::RemoveRole_output output = test.removeRole(ADMIN, (uint8)QSB::Role::Oracle, ORACLE1);
     EXPECT_TRUE(output.success);
-    
+
     test.getState()->checkOracleCount(0);
 }
 

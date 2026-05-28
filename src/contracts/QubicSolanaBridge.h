@@ -68,6 +68,8 @@ static constexpr uint8 QSBReasonInvalidFeeParams = 18;
 static constexpr uint8 QSBReasonTransferFailed = 19;
 static constexpr uint8 QSBReasonEraMismatch = 20;
 static constexpr uint8 QSBReasonInvalidAdmin = 21;
+static constexpr uint8 QSBReasonInvalidRole = 22;
+static constexpr uint8 QSBReasonOrderNotFound = 23;
 // 21 reserved for future use
 
 struct QSB2
@@ -885,7 +887,7 @@ public:
 		locals.idx = findLockedOrderIndexByNonce(state, input.nonce, 0);
 		if (locals.idx == NULL_INDEX)
 		{
-			locals.logMsg.reasonCode = QSBReasonNonceUsed;
+			locals.logMsg.reasonCode = QSBReasonOrderNotFound;
 			LOG_INFO(locals.logMsg);
 			return;
 		}
@@ -1574,6 +1576,16 @@ public:
 					return;
 				}
 			}
+			locals.logMsg._contractIndex = SELF_INDEX;
+			locals.logMsg._type = QSBLogRoleGranted;
+			locals.logMsg.role = input.role;
+			locals.logMsg.account = input.account;
+			locals.logMsg.caller = qpi.invocator();
+			locals.logMsg.success = 0;
+			locals.logMsg.reasonCode = QSBReasonNoSpace;
+			locals.logMsg._terminator = 0;
+			LOG_INFO(locals.logMsg);
+			return;
 		}
 		else if (input.role == (uint8)Role::Pauser)
 		{
@@ -1614,6 +1626,29 @@ public:
 					return;
 				}
 			}
+			locals.logMsg._contractIndex = SELF_INDEX;
+			locals.logMsg._type = QSBLogRoleGranted;
+			locals.logMsg.role = input.role;
+			locals.logMsg.account = input.account;
+			locals.logMsg.caller = qpi.invocator();
+			locals.logMsg.success = 0;
+			locals.logMsg.reasonCode = QSBReasonNoSpace;
+			locals.logMsg._terminator = 0;
+			LOG_INFO(locals.logMsg);
+			return;
+		}
+		else
+		{
+			locals.logMsg._contractIndex = SELF_INDEX;
+			locals.logMsg._type = QSBLogRoleGranted;
+			locals.logMsg.role = input.role;
+			locals.logMsg.account = input.account;
+			locals.logMsg.caller = qpi.invocator();
+			locals.logMsg.success = 0;
+			locals.logMsg.reasonCode = QSBReasonInvalidRole;
+			locals.logMsg._terminator = 0;
+			LOG_INFO(locals.logMsg);
+			return;
 		}
 	}
 
