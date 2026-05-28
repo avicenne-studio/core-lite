@@ -1005,9 +1005,10 @@ TEST(ContractTestingQSB, TestTransferAdmin_ToNullId)
 
     increaseEnergy(ADMIN, 1);
     QSB::TransferAdmin_output output = test.transferAdmin(ADMIN, NULL_ID);
-    EXPECT_TRUE(output.success);
+    EXPECT_FALSE(output.success);
 
-    test.getState()->checkAdmin(NULL_ID);
+    // Admin must not be reset to zero (which would open bootstrap for everyone)
+    test.getState()->checkAdmin(ADMIN);
 }
 
 TEST(ContractTestingQSB, TestTransferAdmin_FailsWhenNotAdmin)

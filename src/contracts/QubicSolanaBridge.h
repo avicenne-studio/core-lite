@@ -67,6 +67,7 @@ static constexpr uint8 QSBReasonRoleMissing = 17;
 static constexpr uint8 QSBReasonInvalidFeeParams = 18;
 static constexpr uint8 QSBReasonTransferFailed = 19;
 static constexpr uint8 QSBReasonEraMismatch = 20;
+static constexpr uint8 QSBReasonInvalidAdmin = 21;
 // 21 reserved for future use
 
 struct QSB2
@@ -1434,6 +1435,13 @@ public:
 		if (!isAdmin(state, qpi.invocator()))
 		{
 			locals.logMsg.reasonCode = QSBReasonNotAdmin;
+			LOG_INFO(locals.logMsg);
+			return;
+		}
+
+		if (isZero(input.newAdmin))
+		{
+			locals.logMsg.reasonCode = QSBReasonInvalidAdmin;
 			LOG_INFO(locals.logMsg);
 			return;
 		}
