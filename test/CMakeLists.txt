@@ -104,3 +104,12 @@ target_link_libraries(
 
 include(GoogleTest)
 gtest_discover_tests(qubic_core_tests)
+
+# QSB contract structs have sizes that are not multiples of 4 (e.g. empty input structs,
+# single-bit output structs), which triggers the alignment sanitizer when the stack buffer
+# writes its size metadata. Disable alignment sanitizer for this file only.
+if(IS_CLANG OR IS_GCC)
+  set_source_files_properties(contract_qsb.cpp PROPERTIES
+    COMPILE_OPTIONS "-fno-sanitize=alignment"
+  )
+endif()

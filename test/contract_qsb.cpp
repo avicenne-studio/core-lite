@@ -2,6 +2,7 @@
 
 #include "contract_testing.h"
 
+
 static const id QSB_CONTRACT_ID(QSB_CONTRACT_INDEX, 0, 0, 0);
 static const id USER1(123, 456, 789, 876);
 static const id USER2(42, 424, 4242, 42424);
@@ -81,6 +82,11 @@ public:
         initEmptyUniverse();
         INIT_CONTRACT(QSB);
         callSystemProcedure(QSB_CONTRACT_INDEX, INITIALIZE);
+
+        // INITIALIZE sets admin to the real deployment key; transfer to test ADMIN.
+        static const id DEPLOY_ADMIN(11994886480163374182ULL, 7222723150474050185ULL, 4187743050690849231ULL, 4967671197750064684ULL);
+        increaseEnergy(DEPLOY_ADMIN, 1);
+        transferAdmin(DEPLOY_ADMIN, ADMIN);
 
         checkContractExecCleanup();
     }
@@ -1506,4 +1512,32 @@ TEST(ContractTestingQSB, TestUnlock_FailsWhenEraIsTooOld)
 
     QSB::Unlock_output unlockOld = test.unlock(USER1, orderOld, 1, sigs);
     EXPECT_FALSE(unlockOld.success); // fails due to era mismatch
+}
+
+TEST(ContractTestingQSB, PrintStructSizes) {
+#define PRINT_QSB(fn) printf("%-22s in=%3zu out=%3zu loc=%3zu total=%4zu rem=%zu\n", \
+    #fn, sizeof(QSB::fn##_input), sizeof(QSB::fn##_output), sizeof(QSB::fn##_locals), \
+    sizeof(QSB::fn##_input)+sizeof(QSB::fn##_output)+sizeof(QSB::fn##_locals), \
+    (sizeof(QSB::fn##_input)+sizeof(QSB::fn##_output)+sizeof(QSB::fn##_locals))%4)
+    PRINT_QSB(Lock);
+    PRINT_QSB(OverrideLock);
+    PRINT_QSB(Unlock);
+    PRINT_QSB(TransferAdmin);
+    PRINT_QSB(EditOracleThreshold);
+    PRINT_QSB(AddRole);
+    PRINT_QSB(RemoveRole);
+    PRINT_QSB(Pause);
+    PRINT_QSB(Unpause);
+    PRINT_QSB(EditFeeParameters);
+    PRINT_QSB(GetConfig);
+    PRINT_QSB(IsOracle);
+    PRINT_QSB(IsPauser);
+    PRINT_QSB(GetLockedOrder);
+    PRINT_QSB(IsOrderFilled);
+    PRINT_QSB(ComputeOrderHash);
+    PRINT_QSB(GetOracles);
+    PRINT_QSB(GetPausers);
+    PRINT_QSB(GetLockedOrders);
+    PRINT_QSB(GetFilledOrders);
+#undef PRINT_QSB
 }
