@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <vector>
+
 #include <lib/platform_common/processor.h>
 #include <lib/platform_efi/uefi.h>
 #include "platform/random.h"
@@ -12,6 +14,11 @@
 #include "network_messages/common_def.h"
 #include "network_messages/header.h"
 #include "network_messages/common_response.h"
+
+// Operator-configured peer IPs from --peers / QUBIC_PEERS.  Defined in qubic.cpp,
+// declared here so the demotion-protection in penalizePublicPeerRejectedConnection
+// can recognize them as "operator trusted" and skip the penalty.
+extern std::vector<IPv4Address> knownPublicPeersDynamic;
 
 #include "tcp4.h"
 #include "kangaroo_twelve.h"
@@ -31,7 +38,9 @@
 #define NUMBER_OF_REGULAR_OUTGOING_CONNECTIONS 4
 #define NUMBER_OF_INCOMING_CONNECTIONS 4
 #else
-#define NUMBER_OF_REGULAR_OUTGOING_CONNECTIONS 8
+// Bumped from upstream 8 -> 16 to widen mesh sampling for edge/catch-up nodes.
+// Incoming stays at 176 (8 * 22 = 176 still satisfies the upstream 11:1 ratio).
+#define NUMBER_OF_REGULAR_OUTGOING_CONNECTIONS 16
 #define NUMBER_OF_INCOMING_CONNECTIONS 176
 #endif
 #define NUMBER_OF_OM_NODE_CONNECTIONS (sizeof(oracleMachineIPs) / sizeof(oracleMachineIPs[0]))
@@ -450,6 +459,77 @@ static void pushToFullNodes(RequestResponseHeader* requestResponseHeader, int nu
     }
 }
 
+// Fan-out widths for catch-up "fetch missing data" requests.  Each upstream
+// pushToAny + pushToAnyFullNode pair sends to only 2 peers; if either is slow
+// the whole 500 ms tick-request poll is wasted.  Sending to a few more peers
+// in parallel shortens the average wait at negligible bandwidth cost.
+static constexpr int CATCHUP_FANOUT_ANY      = 3;
+static constexpr int CATCHUP_FANOUT_FULLNODE = 2;
+static constexpr int CATCHUP_FANOUT_TOTAL    = CATCHUP_FANOUT_ANY + CATCHUP_FANOUT_FULLNODE;
+
+// Fan out a "fetch missing data" request to several random peers plus several
+// fullnode peers.  Replaces the upstream pushToAny + pushToAnyFullNode pair
+// for requests whose completion gates tick advancement.
+static void pushCatchupFanOut(RequestResponseHeader* requestResponseHeader)
+{
+    PROFILE_SCOPE();
+    pushCustom(requestResponseHeader, CATCHUP_FANOUT_ANY,      /*filterFullNode=*/false);
+    pushCustom(requestResponseHeader, CATCHUP_FANOUT_FULLNODE, /*filterFullNode=*/true);
+}
+
+// Send a "fetch data for tick T" request preferring peers whose peerReportedTick
+// is >= T (i.e. peers that have provably processed up to or past that tick, so
+// they must have its tick-data, votes, and transactions).  Falls back to peers
+// below the target when not enough qualified peers exist — so we always send
+// to up to `numberOfReceivers` peers total, just with a quality preference.
+//
+// Used in catch-up mode for tick-data, quorum-tick, and tick-transaction
+// requests where the target tick is known.  Peers below the target can't help,
+// so prefer the ones that can.
+static void pushPreferringAtOrAbove(
+    RequestResponseHeader* requestResponseHeader,
+    unsigned int targetTick,
+    int numberOfReceivers = CATCHUP_FANOUT_TOTAL)
+{
+    PROFILE_SCOPE();
+    unsigned short qualified[NUMBER_OF_OUTGOING_CONNECTIONS + NUMBER_OF_INCOMING_CONNECTIONS];
+    unsigned short unqualified[NUMBER_OF_OUTGOING_CONNECTIONS + NUMBER_OF_INCOMING_CONNECTIONS];
+    int numQualified = 0;
+    int numUnqualified = 0;
+
+    for (unsigned int i = 0; i < NUMBER_OF_OUTGOING_CONNECTIONS + NUMBER_OF_INCOMING_CONNECTIONS; i++)
+    {
+        if (peers[i].tcp4Protocol && peers[i].isConnectedAccepted
+            && peers[i].exchangedPublicPeers && !peers[i].isClosing)
+        {
+            if (peers[i].peerReportedTick >= targetTick)
+                qualified[numQualified++] = i;
+            else
+                unqualified[numUnqualified++] = i;
+        }
+    }
+
+    int remaining = numberOfReceivers;
+    // Prefer qualified peers (known to have data for this tick).
+    while (remaining > 0 && numQualified > 0)
+    {
+        const unsigned short idx = random(numQualified);
+        push(&peers[qualified[idx]], requestResponseHeader);
+        qualified[idx] = qualified[--numQualified];
+        remaining--;
+    }
+    // Fall back to the rest of the pool so we still hit the fan-out width
+    // when qualified candidates are sparse (e.g. fresh node, peerReportedTick
+    // still 0 for most peers because nobody has replied to us yet).
+    while (remaining > 0 && numUnqualified > 0)
+    {
+        const unsigned short idx = random(numUnqualified);
+        push(&peers[unqualified[idx]], requestResponseHeader);
+        unqualified[idx] = unqualified[--numUnqualified];
+        remaining--;
+    }
+}
+
 // Add message to response queue of specific peer. If peer is NULL, it will be sent to random peers. Can be called from any thread.
 static void enqueueResponse(Peer* peer, RequestResponseHeader* responseHeader)
 {
@@ -616,6 +696,13 @@ static bool isAddressInKnownPublicPeers(const IPv4Address& address)
         if (peer_ip == address)
             return true;
     }
+    // Also treat operator-configured --peers as known peers, so they survive
+    // peer-refresh churn and don't get demoted on transient connect rejects.
+    for (const IPv4Address& peer_ip : knownPublicPeersDynamic)
+    {
+        if (peer_ip == address)
+            return true;
+    }
     return false;
 }
 
@@ -655,6 +742,13 @@ static void forgetPublicPeer(const IPv4Address& address)
 // Penalize rejected connection by setting verified peer to non-verified or forgetting a non-verified peer
 static void penalizePublicPeerRejectedConnection(const IPv4Address& address)
 {
+    // Never demote operator-configured peers (baked-in knownPublicPeers + runtime
+    // --peers).  Transient connect rejects (peer's incoming slots full, momentary
+    // network blip) shouldn't strip the seed-quality flag from peers we explicitly
+    // chose to trust.
+    if (isAddressInKnownPublicPeers(address))
+        return;
+
     bool forgetPeer = false;
 
     ACQUIRE(publicPeersLock);

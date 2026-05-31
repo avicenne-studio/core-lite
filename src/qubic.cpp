@@ -7571,7 +7571,7 @@ static void logInfo()
     appendNumber(message, numberOfDisseminatedRequests - prevNumberOfDisseminatedRequests, TRUE);
     appendText(message, L"] ");
 
-    unsigned int numberOfConnectingSlots = 0, numberOfConnectedSlots = 0;
+    unsigned int numberOfConnectingSlots = 0, numberOfConnectedSlots = 0, numberOfHandshakedSlots = 0;
     for (unsigned int i = 0; i < NUMBER_OF_OUTGOING_CONNECTIONS + NUMBER_OF_INCOMING_CONNECTIONS; i++)
     {
         if (peers[i].tcp4Protocol)
@@ -7583,12 +7583,18 @@ static void logInfo()
             else
             {
                 numberOfConnectedSlots++;
+                if (peers[i].exchangedPublicPeers)
+                {
+                    numberOfHandshakedSlots++;
+                }
             }
         }
     }
     appendNumber(message, numberOfConnectingSlots, FALSE);
     appendText(message, L"|");
     appendNumber(message, numberOfConnectedSlots, FALSE);
+    appendText(message, L"|");
+    appendNumber(message, numberOfHandshakedSlots, FALSE);
 
     appendText(message, L" ");
     appendNumber(message, numberOfHandshakedPublicPeers, TRUE);
@@ -7597,6 +7603,51 @@ static void logInfo()
     appendText(message, L"/");    
     appendNumber(message, numberOfPublicPeers, TRUE);
     appendText(message, listOfPeersIsStatic ? L" Static" : L" Dynamic");
+#if USE_FUTURE_TICK_PREFETCH
+    {
+        // Catch-up indicator: how far behind the network tip we are and
+        // the current fan-out prefetch depth (2 = in sync, >2 = catching up).
+        unsigned int networkTipTick = 0;
+        for (unsigned int i = 0; i < NUMBER_OF_OUTGOING_CONNECTIONS + NUMBER_OF_INCOMING_CONNECTIONS; i++)
+        {
+            if (peers[i].tcp4Protocol && peers[i].isConnectedAccepted && !peers[i].isClosing)
+            {
+                if (peers[i].peerReportedTick > networkTipTick)
+                    networkTipTick = peers[i].peerReportedTick;
+            }
+        }
+        const unsigned int ticksBehind = networkTipTick > system.tick
+            ? (networkTipTick - system.tick) : 0;
+        unsigned int prefetchDepth = 2;
+        if (ticksBehind >= 2)
+            prefetchDepth = (ticksBehind < 20) ? ticksBehind : 20;
+        appendText(message, L" behind=");
+        appendNumber(message, ticksBehind, FALSE);
+        appendText(message, L" depth=");
+        appendNumber(message, prefetchDepth, FALSE);
+    }
+#endif
+    // Next-tick blocking-state indicator: shows what the tick processor is
+    // currently waiting for. Combined with the XXX:YYY vote count in the
+    // prefix, this lets an operator diagnose stuck-tick causes at a glance:
+    //   tx=?       votes have not converged on next-tick digest yet
+    //   tx=empty   next tick is expected to be empty (no tx required)
+    //   tx=K/T     K of T transactions for next tick are locally known
+    if (!targetNextTickDataDigestIsKnown)
+    {
+        appendText(message, L" tx=?");
+    }
+    else if (isZero(targetNextTickDataDigest))
+    {
+        appendText(message, L" tx=empty");
+    }
+    else
+    {
+        appendText(message, L" tx=");
+        appendNumber(message, numberOfKnownNextTickTransactions, FALSE);
+        appendText(message, L"/");
+        appendNumber(message, numberOfNextTickTransactions, FALSE);
+    }
     appendText(message, L" (+");
     appendNumber(message, numberOfReceivedBytes - prevNumberOfReceivedBytes, TRUE);
     appendText(message, L" -");
@@ -8685,7 +8736,10 @@ EFI_STATUS efi_main(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE* systemTable)
 #endif
                 tryResendTickVotes();
 
-                if (curTimeTick - peerRefreshingTick >= PEER_REFRESHING_PERIOD * frequency / 1000)
+                // Skip churn entirely in static peer mode — operators on this node
+                // explicitly asked us to keep peer connections stable.
+                if (!listOfPeersIsStatic
+                    && curTimeTick - peerRefreshingTick >= PEER_REFRESHING_PERIOD * frequency / 1000)
                 {
                     peerRefreshingTick = curTimeTick;
 
@@ -8741,8 +8795,9 @@ EFI_STATUS efi_main(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE* systemTable)
                                 requestedQuorumTick.requestQuorumTick.quorumTick.voteFlags[i >> 3] |= (1 << (i & 7));
                             }
                         }
-                        pushToAny(&requestedQuorumTick.header);
-                        pushToAnyFullNode(&requestedQuorumTick.header);
+                        // Current-tick quorum: most peers are at or near our tick,
+                        // so target filtering doesn't gain much.  Use plain fan-out.
+                        pushCatchupFanOut(&requestedQuorumTick.header);
                     }
                     tickRequestingIndicator = gTickTotalNumberOfComputors;
                     if (futureTickRequestingIndicator == gFutureTickTotalNumberOfComputors
@@ -8759,8 +8814,8 @@ EFI_STATUS efi_main(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE* systemTable)
                                 requestedQuorumTick.requestQuorumTick.quorumTick.voteFlags[i >> 3] |= (1 << (i & 7));
                             }
                         }
-                        pushToAny(&requestedQuorumTick.header);
-                        pushToAnyFullNode(&requestedQuorumTick.header);
+                        // Next-tick quorum: prefer peers we know are at or past tick + 1.
+                        pushPreferringAtOrAbove(&requestedQuorumTick.header, system.tick + 1);
                     }
                     futureTickRequestingIndicator = gFutureTickTotalNumberOfComputors;
 
@@ -8779,15 +8834,13 @@ EFI_STATUS efi_main(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE* systemTable)
                         // targetNextTickDataDigestIsKnown == false means there is no consensus on next tick data yet
                         requestedTickData.header.randomizeDejavu();
                         requestedTickData.requestTickData.requestedTickData.tick = system.tick + 1;
-                        pushToAny(&requestedTickData.header);
-                        pushToAnyFullNode(&requestedTickData.header);
+                        pushPreferringAtOrAbove(&requestedTickData.header, system.tick + 1);
                     }
                     if (ts.tickData[system.tick + 2 - system.initialTick].epoch != system.epoch && isNewTickPlus2)
                     {
                         requestedTickData.header.randomizeDejavu();
                         requestedTickData.requestTickData.requestedTickData.tick = system.tick + 2;
-                        pushToAny(&requestedTickData.header);
-                        pushToAnyFullNode(&requestedTickData.header);
+                        pushPreferringAtOrAbove(&requestedTickData.header, system.tick + 2);
                     }
                     ts.tickData.releaseLock();
 
@@ -8810,8 +8863,9 @@ EFI_STATUS efi_main(EFI_HANDLE imageHandle, EFI_SYSTEM_TABLE* systemTable)
                         if (requestedTickTransactions.requestedTickTransactions.tick)
                         {
                             requestedTickTransactions.header.randomizeDejavu();
-                            pushToAny(&requestedTickTransactions.header);
-                            pushToAnyFullNode(&requestedTickTransactions.header);
+                            pushPreferringAtOrAbove(
+                                &requestedTickTransactions.header,
+                                requestedTickTransactions.requestedTickTransactions.tick);
 
                             requestedTickTransactions.requestedTickTransactions.tick = 0;
                         }
@@ -9178,7 +9232,8 @@ void processArgs(int argc, const char* argv[]) {
         ("fv, force-verify-solutions", "Passcode to access http server", cxxopts::value<bool>())
         ("fbis, force-broadcast-invalid-solution", "TEST: each tick, broadcast a random-nonce solution tx signed by a random own-computor to exercise the reprocessSolutionTransaction() rollback path", cxxopts::value<bool>())
         ("s,security-tick", "Core will verify state after x tick, to reduce computational to the node", cxxopts::value<int>()->default_value("1"))
-        ("http-port", "Port for the built-in HTTP/RPC server to listen on", cxxopts::value<int>()->default_value("41841"));
+        ("http-port", "Port for the built-in HTTP/RPC server to listen on", cxxopts::value<int>()->default_value("41841"))
+        ("static-peers", "Run in static peer mode: do not add/remove peers, do not churn 25% of non-fullnode peers every 2 minutes, do not accept new incoming connections. Useful for nodes far from the network's center of mass where the default churn drops good peers before they're classified as fullnodes.");
     auto result = options.parse(argc, argv);
 
     if (result.count("peers")) {
@@ -9269,6 +9324,13 @@ void processArgs(int argc, const char* argv[]) {
         mainAuxStatus = mode;
         std::string modeString = (isMainMode() ? "MAIN" : "aux") + std::string("&") + ((mainAuxStatus & 2) ? "MAIN" : "aux") + std::string(" mode enabled.");
         logColorToScreen("INFO", modeString);
+    }
+
+    if (result.count("static-peers"))
+    {
+        listOfPeersIsStatic = true;
+        listOfPeersIsStaticLiteNode = true;
+        logColorToScreen("INFO", "Static peer mode enabled (no peer churn, no new incoming connections)");
     }
 
     // expected format seed1,seed2 where seed1,seed2 is string of 55 lowercase alphabet character
