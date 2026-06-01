@@ -20,7 +20,11 @@
 #include "private_settings.h"
 
 #ifdef TESTNET
-#define NETWORK_QUEUEUE_REDUCED_TIME 4
+  #ifdef TESTNET_LITE_RAM
+  #define NETWORK_QUEUEUE_REDUCED_TIME 16 // 64 MB request/response queues — LITE testnet
+  #else
+  #define NETWORK_QUEUEUE_REDUCED_TIME 4
+  #endif
 #else
 #define NETWORK_QUEUEUE_REDUCED_TIME 1
 #endif

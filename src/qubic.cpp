@@ -19,19 +19,39 @@
 #include "platform/msvc_polyfill.h"
 #endif
 
-////////////////// USER CONFIGURABLE OPTIONS (default is for mainnet with swap feature) \\\\\\\\\\\\\\\\
+// ============================================================================
+//  USER CONFIGURABLE OPTIONS  (defaults target mainnet + swap)
+// ============================================================================
+//
+//   TESTNET             - compile as testnet node
+//   TESTNET_PREFILL_QUS - prefill computors / custom addresses with test QUs
+//   TESTNET_LITE_RAM    - testnet only; shrink fixed buffers (wire-incompatible
+//                         with non-LITE peers, incompatible snapshots, more
+//                         tick-storage disk I/O)
+//   USE_SWAP            - page tick storage to disk (recommended for mainnet)
+//
+// Uncomment to enable.
+// ----------------------------------------------------------------------------
 
-// #define TESTNET // UNCOMMENT this line if you want to compile for testnet
-// #define TESTNET_PREFILL_QUS // UNCOMMENT this line if you want to send test QUs to computors/custom address at epoch begin
-// this option enables using disk as RAM to reduce hardware requirement for qubic core node
-// it is highly recommended to enable this option if you want to run a full mainnet node on SSD
-// UNCOMMENT this line to enable it
+// #define TESTNET
+// #define TESTNET_PREFILL_QUS
+// #define TESTNET_LITE_RAM
 #define USE_SWAP
 
-//////////////////////////////////////////////////////////////
+// ============================================================================
 
 #ifdef CMAKE_NO_USE_SWAP
 #undef USE_SWAP
+#endif
+
+#if defined(TESTNET_LITE_RAM) && !defined(TESTNET)
+#error "TESTNET_LITE_RAM only applies when TESTNET is defined"
+#endif
+
+#if defined(TESTNET) && defined(TESTNET_LITE_RAM)
+#define DEJAVU_POOL_SIZE 33554432ULL    // 32 MB
+#else
+#define DEJAVU_POOL_SIZE 536870912ULL   // 512 MB
 #endif
 
 #define REAL_NODE
@@ -164,7 +184,11 @@ TickStorage::TransactionsDigestAccess TickStorage::transactionsDigestAccess;
 #define TICK_REQUESTING_PERIOD 500ULL
 #define MAX_NUMBER_EPOCH 1000ULL
 #define MAX_NUMBER_OF_MINERS 8192
+#if defined(TESTNET) && defined(TESTNET_LITE_RAM)
+#define NUMBER_OF_MINER_SOLUTION_FLAGS 0x10000000 // 16 MB bitmap — LITE testnet
+#else
 #define NUMBER_OF_MINER_SOLUTION_FLAGS 0x100000000
+#endif
 #define MAX_MESSAGE_PAYLOAD_SIZE MAX_TRANSACTION_SIZE
 #define MAX_UNIVERSE_SIZE 1073741824
 #define MESSAGE_DISSEMINATION_THRESHOLD 1000000000
@@ -7311,13 +7335,13 @@ static bool initialize()
     score->loadScoreCache(system.epoch);
 
     logToConsole(L"Allocating buffers ...");
-    if ((!allocPoolWithErrorLog(L"dejavu0", 536870912, (void**)&dejavu0, __LINE__)) ||
-        (!allocPoolWithErrorLog(L"dejavu1", 536870912, (void**)&dejavu1, __LINE__)))
+    if ((!allocPoolWithErrorLog(L"dejavu0", DEJAVU_POOL_SIZE, (void**)&dejavu0, __LINE__)) ||
+        (!allocPoolWithErrorLog(L"dejavu1", DEJAVU_POOL_SIZE, (void**)&dejavu1, __LINE__)))
     {
         return false;
     }
-    setMem((void*)dejavu0, 536870912, 0);
-    setMem((void*)dejavu1, 536870912, 0);
+    setMem((void*)dejavu0, DEJAVU_POOL_SIZE, 0);
+    setMem((void*)dejavu1, DEJAVU_POOL_SIZE, 0);
 
     if ((!allocPoolWithErrorLog(L"requestQueueBuffer", REQUEST_QUEUE_BUFFER_SIZE, (void**)&requestQueueBuffer, __LINE__)) ||
         (!allocPoolWithErrorLog(L"respondQueueBuffer", RESPONSE_QUEUE_BUFFER_SIZE, (void**)&responseQueueBuffer, __LINE__)))
@@ -9074,67 +9098,86 @@ namespace Color {
     constexpr auto bold = "\033[1m";
 }
 
+void logColorToScreen(std::string type, std::string msg);
+
 unsigned long long getTotalRam()
 {
     unsigned long long totalRam = 0;
 
+    auto add = [&](const char* label, unsigned long long bytes) {
+        totalRam += bytes;
+#if defined(TESTNET) && defined(TESTNET_LITE_RAM)
+        logColorToScreen("INFO", std::string("  RAM ") + label + " " + std::to_string(bytes / (1024 * 1024)) + " MB");
+#else
+        (void)label;
+#endif
+    };
+
     // tx mempool
-    totalRam += pendingTxsPool.getSize();
+    add("pendingTxsPool", pendingTxsPool.getSize());
 
     // spectrum & spectrumDigests
-    totalRam += spectrumSizeInBytes;
-    totalRam += spectrumDigestsSizeInByte;
+    add("spectrum", spectrumSizeInBytes);
+    add("spectrumDigests", spectrumDigestsSizeInByte);
 
-    // reorgBuffer
-    totalRam += COMMON_BUFFERS_COUNT * defaultCommonBuffersSize;
+    {
+        add("commonBuffers", COMMON_BUFFERS_COUNT * defaultCommonBuffersSize);
+    }
 
     // assets & assetDigets & assetChangeFlags
-    totalRam += ASSETS_CAPACITY * sizeof(AssetRecord);
-    totalRam += assetDigestsSizeInBytes;
-    totalRam += ASSETS_CAPACITY / 8;
+    add("assets", ASSETS_CAPACITY * sizeof(AssetRecord));
+    add("assetDigests", assetDigestsSizeInBytes);
+    add("assetChangeFlags", ASSETS_CAPACITY / 8);
 
     // ContractActionTracker
-    totalRam += CONTRACT_ACTION_TRACKER_SIZE * sizeof(ContractAction);
+    add("ContractActionTracker", CONTRACT_ACTION_TRACKER_SIZE * sizeof(ContractAction));
 
     // score
-    totalRam += sizeof(*score) + sizeof(*score_qpi);
+    add("score+score_qpi", sizeof(*score) + sizeof(*score_qpi));
 
     // dejavu0 & dejavu1
-    totalRam += 536870912*2;
+    add("dejavu", DEJAVU_POOL_SIZE * 2);
 
     // requestQueueBuffer & responseQueueBuffer
-    totalRam += REQUEST_QUEUE_BUFFER_SIZE;
-    totalRam += RESPONSE_QUEUE_BUFFER_SIZE;
+    add("requestQueueBuffer", REQUEST_QUEUE_BUFFER_SIZE);
+    add("respondQueueBuffer", RESPONSE_QUEUE_BUFFER_SIZE);
 
     // receiveBuffer & FragmentBuffer & dataToTransmit for each peers
-    totalRam += (NUMBER_OF_OUTGOING_CONNECTIONS + NUMBER_OF_INCOMING_CONNECTIONS) * (BUFFER_SIZE * 3ULL);
+    add("peer_buffers", (NUMBER_OF_OUTGOING_CONNECTIONS + NUMBER_OF_INCOMING_CONNECTIONS) * (BUFFER_SIZE * 3ULL));
 
     // contractStates
-    for (unsigned int contractIndex = 0; contractIndex < contractCount; contractIndex++)
     {
-        unsigned long long size = contractDescriptions[contractIndex].stateSize;
-        totalRam += size;
+        unsigned long long sum = 0;
+        for (unsigned int contractIndex = 0; contractIndex < contractCount; contractIndex++)
+            sum += contractDescriptions[contractIndex].stateSize;
+        add("contractStates_sum", sum);
     }
 
     // processor buffers
-    totalRam += MAX_NUMBER_OF_PROCESSORS * (BUFFER_SIZE + STACK_SIZE);
+    add("processor_buffers", MAX_NUMBER_OF_PROCESSORS * (BUFFER_SIZE + STACK_SIZE));
+
+    // minerSolutionFlags (qubic.cpp:7068)
+    add("minerSolutionFlags", NUMBER_OF_MINER_SOLUTION_FLAGS / 8);
+
+    // contractLocalsStack array (contract_exec.h:45)
+    add("contractLocalsStack", NUMBER_OF_CONTRACT_EXECUTION_BUFFERS * (unsigned long long)ContractLocalsStack::capacity());
 
     // tick storage
-    totalRam += ts.getTickDataSize();
-    totalRam += ts.getTicksSize();
-    totalRam += ts.getTickTransactionsSize();
-    totalRam += ts.getTickTransactionOffsetSize();
+    add("ts.tickData",      ts.getTickDataSize());
+    add("ts.ticks",         ts.getTicksSize());
+    add("ts.tickTxs",       ts.getTickTransactionsSize());
+    add("ts.tickTxOffsets", ts.getTickTransactionOffsetSize());
 #ifdef USE_SWAP
-    totalRam += ts.getTickTransactionsDigestPtrSize();
+    add("ts.txDigestHashMap", ts.getTickTransactionsDigestPtrSize());
 #else
     // At current mainnet state, tick transactions use about 1/10 of the allocated space
-    totalRam += ts.getTickTransactionsDigestPtrSize() / 10;
+    add("ts.txDigestHashMap_1over10", ts.getTickTransactionsDigestPtrSize() / 10);
 #endif
 
     // logging size
-    totalRam += qLogger::logBuffer.getVmStateSize();
-    totalRam += qLogger::mapLogIdToBufferIndex.getVmStateSize();
-    totalRam += qLogger::mapTxToLogId.getVmStateSize();
+    add("log.logBuffer", qLogger::logBuffer.getVmStateSize());
+    add("log.mapLogIdToBufferIndex", qLogger::mapLogIdToBufferIndex.getVmStateSize());
+    add("log.mapTxToLogId", qLogger::mapTxToLogId.getVmStateSize());
 
 
     return totalRam;
