@@ -71,6 +71,22 @@ public:
         bool same = false;
         markOrderFilled(asMutState(), hash, 0, 0, same, entry);
     }
+
+    // Directly write an active locked order entry into a slot (bypasses contract call overhead).
+    void fillLockedOrderSlot(uint32 slot, uint32 nonce)
+    {
+        LockedOrderEntry entry = {};
+        entry.active = true;
+        entry.nonce = nonce;
+        entry.sender = id((uint64)(slot + 10000), 0ULL, 0ULL, 0ULL);
+        entry.amount = 1;
+        asMutState().mut().lockedOrders.set(slot, entry);
+    }
+
+    void setLastLockedOrdersNextIdx(uint32 idx)
+    {
+        asMutState().mut().lastLockedOrdersNextOverwriteIdx = idx;
+    }
 };
 
 class ContractTestingQSB : protected ContractTesting
@@ -950,37 +966,33 @@ TEST(ContractTestingQSB, TestLock_FailsWhenInvocationRewardTooLowAndIsRefunded)
     EXPECT_EQ(balanceAfter, balanceBefore);
 }
 
-TEST(ContractTestingQSB, TestLock_RingBufferOverwritesOldLockedOrders)
+TEST(ContractTestingQSB, TestLock_RingBufferOverwritesOldestSlot)
 {
     ContractTestingQSB test;
-
     const uint64 amount = 1;
-    const uint64 relayerFee = 0;
 
-    // Fill all available locked order slots with unique nonces
+    // Fill all QSB_MAX_LOCKED_ORDERS slots sequentially.
     for (uint32 i = 0; i < QSB_MAX_LOCKED_ORDERS; ++i)
     {
         increaseEnergy(USER1, amount);
-        QSB::Lock_output out = test.lock(USER1, amount, relayerFee, 1, i, ContractTestingQSB::createZeroAddress(), amount);
-        EXPECT_TRUE(out.success);
+        QSB::Lock_output out = test.lock(USER1, amount, 0, 1, i, ContractTestingQSB::createZeroAddress(), amount);
+        ASSERT_TRUE(out.success);
     }
 
-    // Next lock should still succeed, but the ring buffer will overwrite
-    // one of the older entries. The very first nonce (0) should no longer
-    // be queryable via GetLockedOrder, while the latest nonce should exist.
-    const uint32 oldestNonce = 0;
-    const uint32 newestNonce = QSB_MAX_LOCKED_ORDERS;
+    // Verify slot 0 holds nonce=0 (the first lock).
+    QSB::GetLockedOrder_output first = test.getLockedOrder(0);
+    ASSERT_TRUE((bool)first.exists);
+    EXPECT_EQ(first.order.nonce, 0u);
 
+    // One more lock (nonce=QSB_MAX_LOCKED_ORDERS) must overwrite slot 0.
     increaseEnergy(USER1, amount);
-    QSB::Lock_output overflowOut = test.lock(USER1, amount, relayerFee, 1, newestNonce, ContractTestingQSB::createZeroAddress(), amount);
-    EXPECT_TRUE(overflowOut.success);
+    QSB::Lock_output overflow = test.lock(USER1, amount, 0, 1, QSB_MAX_LOCKED_ORDERS, ContractTestingQSB::createZeroAddress(), amount);
+    EXPECT_TRUE(overflow.success);
 
-    QSB::GetLockedOrder_output oldest = test.getLockedOrder(oldestNonce);
-    EXPECT_FALSE((bool)oldest.exists);
-
-    QSB::GetLockedOrder_output newest = test.getLockedOrder(newestNonce);
-    EXPECT_TRUE((bool)newest.exists);
-    EXPECT_EQ(newest.order.nonce, newestNonce);
+    // Slot 0 now holds the newest nonce.
+    QSB::GetLockedOrder_output overwritten = test.getLockedOrder(0);
+    ASSERT_TRUE((bool)overwritten.exists);
+    EXPECT_EQ(overwritten.order.nonce, QSB_MAX_LOCKED_ORDERS);
 }
 
 TEST(ContractTestingQSB, TestLock_FailsWhenNonceAlreadyUsedAndRefunds)

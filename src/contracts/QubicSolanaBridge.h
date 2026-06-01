@@ -510,8 +510,8 @@ public:
 		Array<FilledOrderEntry, QSB_MAX_FILLED_ORDERS> filledOrders;
 		Array<FilledOrderEntry, QSB_MAX_FILLED_ORDERS> filledOrdersPrev;
 		Array<LockedOrderEntry, QSB_MAX_LOCKED_ORDERS> lockedOrders;
-		uint32 lastLockedOrdersNextOverwriteIdx;
 		uint32 lastFilledOrdersNextOverwriteIdx;
+		uint32 lastLockedOrdersNextOverwriteIdx;
 		uint32 oracleCount;
 		uint32 pauserCount;
 		uint32 bpsFee;               // fee taken in BPS (base 10000) from netAmount
@@ -621,21 +621,6 @@ protected:
 		return NULL_INDEX;
 	}
 
-	// Clear a locked order entry so its slot can be reused
-	inline static void clearLockedOrderEntry(LockedOrderEntry& entry)
-	{
-		entry.active = false;
-		entry.lockEpoch = 0;
-		entry.orderEra = 0;
-		entry.sender = 0;
-		entry.networkOut = 0;
-		entry.amount = 0;
-		entry.relayerFee = 0;
-		entry.nonce = 0;
-		setMemory(entry.toAddress, 0);
-		setMemory(entry.orderHash, 0);
-	}
-
 	// Mark an orderHash as filled (idempotent, ring-buffer storage)
 	inline static void markOrderFilled(QPI::ContractState<StateData, CONTRACT_INDEX>& state, const OrderHash& hash, uint32 i, uint32 j, bool same, FilledOrderEntry& entry)
 	{
@@ -729,6 +714,7 @@ protected:
 		return NULL_INDEX;
 	}
 
+
 public:
 	// ---------------------------------------------------------------------
 	// Core user procedures
@@ -737,7 +723,6 @@ public:
 	struct Lock_locals
 	{
 		id digest;
-		LockedOrderEntry existing;
 		Order tmpOrder;
 		LockedOrderEntry entry;
 		QSBOrderMessage msgBuffer;
@@ -840,7 +825,8 @@ public:
 		locals.logMsg.orderHash = output.orderHash;
 		locals.logMsg.orderEra = state.get().orderEra;
 
-		// Persist locked order so that overrideLock or off-chain tooling can reference it.
+		// Persist locked order in ring buffer. Oldest slot is overwritten when the buffer is full;
+		// by the time the ring wraps (1024 orders), off-chain tooling has indexed earlier entries.
 		locals.entry.active = true;
 		locals.entry.sender = qpi.invocator();
 		locals.entry.networkOut = input.networkOut;
@@ -852,8 +838,6 @@ public:
 		locals.entry.lockEpoch = qpi.epoch();
 		locals.entry.orderEra = state.get().orderEra;
 		state.mut().lockedOrders.set(state.get().lastLockedOrdersNextOverwriteIdx, locals.entry);
-
-		// always overwrite the next slot, wrapping around with a power-of-two mask.
 		state.mut().lastLockedOrdersNextOverwriteIdx = (state.get().lastLockedOrdersNextOverwriteIdx + 1) & (QSB_MAX_LOCKED_ORDERS - 1);
 
 		output.success = true;
@@ -2003,10 +1987,10 @@ public:
 		state.mut().admin = id(11994886480163374182ULL, 7222723150474050185ULL, 4187743050690849231ULL, 4967671197750064684ULL);
 		state.mut().paused = false;
 
-		state.mut().oracleThreshold                   = 67; // default 67% (2/3 + 1 style)
-		state.mut().lastLockedOrdersNextOverwriteIdx  = 0;
-		state.mut().lastFilledOrdersNextOverwriteIdx  = 0;
-		state.mut().oracleCount                       = 0;
+		state.mut().oracleThreshold                    = 67; // default 67% (2/3 + 1 style)
+		state.mut().lastFilledOrdersNextOverwriteIdx   = 0;
+		state.mut().lastLockedOrdersNextOverwriteIdx   = 0;
+		state.mut().oracleCount                        = 0;
 		state.mut().pauserCount                       = 0;
 
 		// Clear role mappings and filled order table
