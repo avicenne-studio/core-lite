@@ -2640,6 +2640,9 @@ static void processTickTransactionSolution(const MiningSolutionTransaction* tran
     static_assert(sizeof(data) == 3 * 32, "Unexpected array size");
     unsigned int flagIndices[2];
     KangarooTwelve(data, sizeof(data), flagIndices, sizeof(flagIndices));
+    // mask hash into allocated minerSolutionFlags bit-range (no-op at full size; LITE-safe)
+    flagIndices[0] &= (unsigned int)(NUMBER_OF_MINER_SOLUTION_FLAGS - 1);
+    flagIndices[1] &= (unsigned int)(NUMBER_OF_MINER_SOLUTION_FLAGS - 1);
     // Two independent flag checks to reduce false-positive collision probability from ~N/2^32 to ~N^2/2^64
     if (!(minerSolutionFlags[flagIndices[0] >> 6] & (1ULL << (flagIndices[0] & 63)))
         || !(minerSolutionFlags[flagIndices[1] >> 6] & (1ULL << (flagIndices[1] & 63))) || isRevalidation)
@@ -3369,6 +3372,9 @@ static void processTick(unsigned long long processorNumber)
                                     static_assert(sizeof(data) == 3 * 32, "Unexpected array size");
                                     unsigned int flagIndices[2];
                                     KangarooTwelve(data, sizeof(data), flagIndices, sizeof(flagIndices));
+                                    // mask hash into allocated minerSolutionFlags bit-range (no-op at full size; LITE-safe)
+                                    flagIndices[0] &= (unsigned int)(NUMBER_OF_MINER_SOLUTION_FLAGS - 1);
+                                    flagIndices[1] &= (unsigned int)(NUMBER_OF_MINER_SOLUTION_FLAGS - 1);
                                     if (!(minerSolutionFlags[flagIndices[0] >> 6] & (1ULL << (flagIndices[0] & 63)))
                                     || !(minerSolutionFlags[flagIndices[1] >> 6] & (1ULL << (flagIndices[1] & 63)))) {
                                         score->addTask(transaction->sourcePublicKey, solution_miningSeed, solution_nonce);

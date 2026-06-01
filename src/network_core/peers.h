@@ -896,6 +896,8 @@ static void processReceivedData(unsigned int i, unsigned int salt)
                                 *((unsigned int*)requestResponseHeader) = salt;
                                 KangarooTwelve(requestResponseHeader, header & 0xFFFFFF, &saltedId, sizeof(saltedId));
                                 *((unsigned int*)requestResponseHeader) = header;
+                                // mask hash into allocated dejavu bit-range (no-op at 512 MB; required when LITE shrinks pool)
+                                saltedId &= (unsigned int)(DEJAVU_POOL_SIZE * 8ULL - 1);
 
                                 // Initiate transfer of already received packet to processing thread
                                 // (or drop it without processing if Dejavu filter tells to ignore it)
