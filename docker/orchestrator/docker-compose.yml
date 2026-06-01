@@ -26,6 +26,10 @@ services:
       # QUBIC_OPERATOR_SEED: ""
       # QUBIC_OPERATOR: ""
       # QUBIC_OPERATOR_ALIAS: ""
+      # One-shot recovery: wipe local tickData + transactions for the listed
+      # ticks at startup, forcing re-fetch from peers. Use when stuck on a
+      # corrupt tick. REMOVE / comment-out after one successful restart.
+      # QUBIC_FLUSH_TICK: "55449245,55449246"
       # Watchdog
       QUBIC_WATCHDOG__ENABLED: "true"
       QUBIC_WATCHDOG__MAX_RESTARTS: "5"

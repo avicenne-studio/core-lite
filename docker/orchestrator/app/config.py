@@ -211,6 +211,12 @@ class OrchestratorConfig(BaseSettings):
     operator_alias: Optional[str] = None
     node_mode: Optional[int] = None
     seeds: str = ""
+    # Comma-separated list of ticks whose local tickData + transaction offsets the
+    # node should wipe at startup, forcing re-fetch from peers. Use to recover from
+    # a stuck node holding corrupt tickData (e.g. signature mismatch from a partial
+    # broadcast). One-shot — remove the env var before the next restart, otherwise
+    # the same ticks will be wiped again. Example: QUBIC_FLUSH_TICK="55449245"
+    flush_tick: str = ""
 
     # Management API
     management_api_port: int = 8080
@@ -263,6 +269,8 @@ class OrchestratorConfig(BaseSettings):
         seeds = self.get_seeds_list()
         if seeds:
             args.extend(["--seeds", ",".join(seeds)])
+        if self.flush_tick:
+            args.extend(["--flush-tick", self.flush_tick])
         return args
 
 

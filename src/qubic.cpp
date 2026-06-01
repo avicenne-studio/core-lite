@@ -195,6 +195,12 @@ struct Processor : public CustomStack
 // Dynamic peers that can be added using command line
 std::vector<IPv4Address> knownPublicPeersDynamic;
 
+// Ticks whose local tickData + transaction offsets should be wiped at startup,
+// forcing re-fetch from peers. Populated by --flush-tick. Used to recover from a
+// node stuck on a corrupt tickData (e.g., signature mismatch because the locally-
+// received tickData has fewer transactions than the signed tick header expects).
+static std::vector<unsigned int> flushTicksAtStartup;
+
 static std::vector<int> mainAuxStatusChangeStack;
 static volatile unsigned char mainAuxStatus = 0;
 static volatile unsigned char isVirtualMachine = 0; // indicate that it is running on VM, to avoid running some functions for BM  (for testing and developing purposes)
@@ -7107,11 +7113,45 @@ static bool initialize()
 #if TICK_STORAGE_AUTOSAVE_MODE
         bool canLoadFromFile = loadAllNodeStates();
 
-        // loading might have changed system.tick, so restart pendingTxsPool 
+        // loading might have changed system.tick, so restart pendingTxsPool
         pendingTxsPool.beginEpoch(system.tick);
 #else
         bool canLoadFromFile = false;
 #endif
+
+        // qli-diag: --flush-tick recovery. Wipe local tickData + transaction
+        // offsets for the requested tick(s) so the normal request loop will
+        // re-fetch them from peers. Runs here because the tick storage is
+        // fully initialized but the tick processor thread hasn't started yet,
+        // so this is race-free.
+        if (!flushTicksAtStartup.empty())
+        {
+            for (unsigned int t : flushTicksAtStartup)
+            {
+                if (!ts.tickInCurrentEpochStorage(t))
+                {
+                    setText(message, L"WARNING: --flush-tick ");
+                    appendNumber(message, t, false);
+                    appendText(message, L" is outside current epoch storage range, skipping.");
+                    logToConsole(message);
+                    continue;
+                }
+                const unsigned int idx = ts.tickToIndexCurrentEpoch(t);
+                ts.tickData.acquireLock();
+                setMem(&ts.tickData[idx], sizeof(TickData), 0);
+                ts.tickData.releaseLock();
+                auto* offsets = ts.tickTransactionOffsets.getByTickIndex(idx);
+                if (offsets)
+                {
+                    setMem(offsets, NUMBER_OF_TRANSACTIONS_PER_TICK * sizeof(unsigned long long), 0);
+                }
+                setText(message, L"Flushed local tickData + transaction offsets for tick ");
+                appendNumber(message, t, false);
+                appendText(message, L"; node will re-fetch from peers.");
+                logToConsole(message);
+            }
+            flushTicksAtStartup.clear();
+        }
 
         // if failed to load snapshot, load all data and init variables from scratch
         if (!canLoadFromFile)
@@ -9233,7 +9273,8 @@ void processArgs(int argc, const char* argv[]) {
         ("fbis, force-broadcast-invalid-solution", "TEST: each tick, broadcast a random-nonce solution tx signed by a random own-computor to exercise the reprocessSolutionTransaction() rollback path", cxxopts::value<bool>())
         ("s,security-tick", "Core will verify state after x tick, to reduce computational to the node", cxxopts::value<int>()->default_value("1"))
         ("http-port", "Port for the built-in HTTP/RPC server to listen on", cxxopts::value<int>()->default_value("41841"))
-        ("static-peers", "Run in static peer mode: do not add/remove peers, do not churn 25% of non-fullnode peers every 2 minutes, do not accept new incoming connections. Useful for nodes far from the network's center of mass where the default churn drops good peers before they're classified as fullnodes.");
+        ("static-peers", "Run in static peer mode: do not add/remove peers, do not churn 25% of non-fullnode peers every 2 minutes, do not accept new incoming connections. Useful for nodes far from the network's center of mass where the default churn drops good peers before they're classified as fullnodes.")
+        ("flush-tick", "Comma-separated list of ticks whose local tickData + transaction offsets should be wiped at startup, forcing the node to re-fetch them from peers. Use to recover from a stuck node holding corrupt tickData (e.g. signature mismatch from a partial broadcast). Example: --flush-tick=55449245,55449246", cxxopts::value<std::string>());
     auto result = options.parse(argc, argv);
 
     if (result.count("peers")) {
@@ -9284,6 +9325,26 @@ void processArgs(int argc, const char* argv[]) {
     if (result.count("security-tick")) {
         securityTick = result["security-tick"].as<int>();
         logColorToScreen("INFO", "Security tick set to " + std::to_string(securityTick));
+    }
+
+    if (result.count("flush-tick")) {
+        std::string s = result["flush-tick"].as<std::string>();
+        std::stringstream ss(s);
+        std::string tok;
+        while (std::getline(ss, tok, ',')) {
+            // trim whitespace
+            while (!tok.empty() && (tok.front() == ' ' || tok.front() == '\t')) tok.erase(tok.begin());
+            while (!tok.empty() && (tok.back() == ' ' || tok.back() == '\t')) tok.pop_back();
+            if (tok.empty()) continue;
+            try {
+                unsigned long val = std::stoul(tok);
+                flushTicksAtStartup.push_back(static_cast<unsigned int>(val));
+            } catch (...) {
+                logColorToScreen("ERROR", "Invalid tick number in --flush-tick: " + tok);
+                exit(1);
+            }
+        }
+        logColorToScreen("INFO", "Will flush " + std::to_string(flushTicksAtStartup.size()) + " tick(s) at startup");
     }
 
     if (result.count("ticking-delay")) {
