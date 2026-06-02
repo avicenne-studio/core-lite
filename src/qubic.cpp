@@ -510,8 +510,6 @@ void logToConsole(const CHAR16* message)
 #endif
 }
 
-#include "extensions/missing_tx_debug.h"
-
 
 static inline bool isMainMode()
 {
@@ -1156,15 +1154,11 @@ static void processBroadcastTransaction(Peer* peer, RequestResponseHeader* heade
             {
                 KangarooTwelve(request, transactionSize, digest, sizeof(digest));
                 auto* tsReqTickTransactionOffsets = ts.tickTransactionOffsets.getByTickIndex(tickIndex);
-                int mtxSlot = -1;
-                bool mtxStored = false, mtxFull = false;
                 for (unsigned int i = 0; i < NUMBER_OF_TRANSACTIONS_PER_TICK; i++)
                 {
                     if (digest == ts.tickData[tickIndex].transactionDigests[i])
                     {
-                        mtxSlot = (int)i;
                         ts.tickTransactions.acquireLock();
-                        const bool mtxWasEmpty = !tsReqTickTransactionOffsets[i];
                         if (!tsReqTickTransactionOffsets[i])
                         {
                             if (ts.nextTickTransactionOffset + transactionSize <= ts.tickTransactions.storageSpaceCurrentEpoch)
@@ -1175,12 +1169,9 @@ static void processBroadcastTransaction(Peer* peer, RequestResponseHeader* heade
                             }
                         }
                         ts.tickTransactions.releaseLock();
-                        mtxStored = mtxWasEmpty && tsReqTickTransactionOffsets[i];
-                        mtxFull = mtxWasEmpty && !tsReqTickTransactionOffsets[i];
                         break;
                     }
                 }
-                missingTxDebug_onBroadcast(request->tick, *(const m256i*)digest, mtxSlot, mtxStored, mtxFull);
             }
             ts.tickData.releaseLock();
 
@@ -5439,9 +5430,6 @@ static void prepareNextTickTransactions()
             }
         }
     }
-
-    missingTxDebug_reportMissingSet(nextTick, unknownTransactions);
-
     nextTickTransactionsSemaphore = 0;
 }
 
