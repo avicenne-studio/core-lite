@@ -30,29 +30,54 @@ static void missingTxDebug_reportMissingSet(unsigned int nextTick, const unsigne
         return;
     LockGuard guard(gMissingTxLock);
     missingTxDebug_resetIfNewTick(nextTick);
+    const unsigned int nextTickIndex = ts.tickToIndexCurrentEpoch(nextTick);
+    const auto* offsets = ts.tickTransactionOffsets.getByTickIndex(nextTickIndex);
     for (unsigned int i = 0; i < NUMBER_OF_TRANSACTIONS_PER_TICK; i++)
     {
         if (!(unknownBitmask[i >> 6] & (1ULL << (i & 63))))
             continue;
-        const m256i& digest = nextTickData.transactionDigests[i];
+        const m256i& expected = nextTickData.transactionDigests[i];
 
         bool seen = false;
         for (unsigned int k = 0; k < gMissingTxCount; k++)
-            if (gMissingTxDigests[k] == digest) { seen = true; break; }
+            if (gMissingTxDigests[k] == expected) { seen = true; break; }
         if (seen)
             continue;
         if (gMissingTxCount < NUMBER_OF_TRANSACTIONS_PER_TICK)
-            gMissingTxDigests[gMissingTxCount++] = digest;
+            gMissingTxDigests[gMissingTxCount++] = expected;
 
-        CHAR16 idChars[60 + 1];
-        getIdentity((const unsigned char*)&digest, idChars, true);
-        CHAR16 msg[256];
+        CHAR16 expChars[60 + 1];
+        getIdentity((const unsigned char*)&expected, expChars, true);
+        CHAR16 msg[320];
         setText(msg, L"[missing-tx] tick ");
         appendNumber(msg, nextTick, FALSE);
         appendText(msg, L" idx ");
         appendNumber(msg, i, FALSE);
-        appendText(msg, L" MISSING (not in tickTx, not in pendingPool) digest ");
-        appendText(msg, idChars);
+        appendText(msg, L" expect ");
+        appendText(msg, expChars);
+
+        ts.tickTransactions.acquireLock();
+        const auto off = offsets[i];
+        if (off)
+        {
+            const Transaction* stored = ts.tickTransactions(off);
+            unsigned char storedDigest[32];
+            KangarooTwelve(stored, stored->totalSize(), storedDigest, sizeof(storedDigest));
+            const unsigned int storedTick = stored->tick;
+            ts.tickTransactions.releaseLock();
+            CHAR16 storedChars[60 + 1];
+            getIdentity(storedDigest, storedChars, true);
+            appendText(msg, L" -> WRONG TX squats slot, stored ");
+            appendText(msg, storedChars);
+            appendText(msg, L" storedTick ");
+            appendNumber(msg, storedTick, FALSE);
+            appendText(msg, L" (broadcast cannot overwrite; needs flush)");
+        }
+        else
+        {
+            ts.tickTransactions.releaseLock();
+            appendText(msg, L" -> ABSENT (no tx stored, not in pendingPool)");
+        }
         logToConsole(msg);
     }
 }
