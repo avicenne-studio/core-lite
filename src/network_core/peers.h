@@ -27,7 +27,11 @@ extern std::vector<IPv4Address> knownPublicPeersDynamic;
 #include "private_settings.h"
 
 #ifdef TESTNET
-#define NETWORK_QUEUEUE_REDUCED_TIME 4
+  #ifdef TESTNET_LITE_RAM
+  #define NETWORK_QUEUEUE_REDUCED_TIME 16 // 64 MB request/response queues — LITE testnet
+  #else
+  #define NETWORK_QUEUEUE_REDUCED_TIME 4
+  #endif
 #else
 #define NETWORK_QUEUEUE_REDUCED_TIME 1
 #endif
@@ -986,6 +990,8 @@ static void processReceivedData(unsigned int i, unsigned int salt)
                                 *((unsigned int*)requestResponseHeader) = salt;
                                 KangarooTwelve(requestResponseHeader, header & 0xFFFFFF, &saltedId, sizeof(saltedId));
                                 *((unsigned int*)requestResponseHeader) = header;
+                                // mask hash into allocated dejavu bit-range (no-op at 512 MB; required when LITE shrinks pool)
+                                saltedId &= (unsigned int)(DEJAVU_POOL_SIZE * 8ULL - 1);
 
                                 // Initiate transfer of already received packet to processing thread
                                 // (or drop it without processing if Dejavu filter tells to ignore it)

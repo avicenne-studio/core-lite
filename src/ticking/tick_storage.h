@@ -21,7 +21,11 @@
 #define DATA_AS_NUMBER 27303570963497060ULL
 #define TXOF_AS_NUMBER (wcharToNumber(L"txof"))
 
+#if defined(TESTNET) && defined(TESTNET_LITE_RAM)
+#define CACHE_PAGE 4   // smaller in-RAM swap cache — LITE testnet (more disk I/O on busy ticks)
+#else
 #define CACHE_PAGE 32
+#endif
 #define TICK_DATA_PAGE_CAPACITY 128 // one page can hold data for 128 ticks
 #define TICKS_PAGE_CAPACITY (64 * NUMBER_OF_COMPUTORS) // one page can hold data for 64 ticks
 #define TRANSACTION_PAGE_CAPACITY (NUMBER_OF_TRANSACTIONS_PER_TICK * 16) // one page can hold data for AT LEAST 16 ticks
