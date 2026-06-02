@@ -195,11 +195,12 @@ struct Processor : public CustomStack
 // Dynamic peers that can be added using command line
 std::vector<IPv4Address> knownPublicPeersDynamic;
 
-// Ticks whose local tickData + transaction offsets should be wiped at startup,
-// forcing re-fetch from peers. Populated by --flush-tick. Used to recover from a
-// node stuck on a corrupt tickData (e.g., signature mismatch because the locally-
-// received tickData has fewer transactions than the signed tick header expects).
-static std::vector<unsigned int> flushTicksAtStartup;
+// Auto-recovery: if the tick processor sits on the same system.tick for longer
+// than `autoFlushStuckSeconds`, wipe the local tickData + transaction offsets
+// for system.tick+1 so the normal request loop re-fetches from peers. Set to 0
+// to disable. Reasonable production values: 60 (Default)-120 seconds. Populated
+// by --auto-flush-stuck-seconds.
+static int autoFlushStuckSeconds = 60;
 
 static std::vector<int> mainAuxStatusChangeStack;
 static volatile unsigned char mainAuxStatus = 0;
@@ -6128,6 +6129,72 @@ static void tickProcessor(void*, unsigned long long processorNumber)
         const unsigned long long curTimeTick = __rdtsc();
         const unsigned int nextTick = system.tick + 1;
 
+        // qli-diag: auto-recovery for a node stuck on a corrupt tickData.
+        // If system.tick hasn't advanced for `autoFlushStuckSeconds` seconds,
+        // AND we have a tickData for system.tick+1 (epoch == current),
+        // AND at least one peer reports a tick beyond system.tick+1
+        // (proving the network is ahead and we're the stuck one),
+        // wipe local tickData + transaction offsets for system.tick+1 so
+        // the request loop re-fetches a fresh copy from peers.
+        static unsigned int autoFlushLastTick = 0;
+        static unsigned long long autoFlushLastTickTime = 0;
+        if (autoFlushStuckSeconds > 0 && frequency > 0)
+        {
+            if (system.tick != autoFlushLastTick)
+            {
+                autoFlushLastTick = system.tick;
+                autoFlushLastTickTime = curTimeTick;
+            }
+            else if ((curTimeTick - autoFlushLastTickTime)
+                     > (unsigned long long)autoFlushStuckSeconds * frequency)
+            {
+                if (ts.tickInCurrentEpochStorage(nextTick))
+                {
+                    const unsigned int idx = ts.tickToIndexCurrentEpoch(nextTick);
+                    const bool haveTickData = (ts.tickData[idx].epoch == system.epoch);
+                    bool networkAhead = false;
+                    for (unsigned int pi = 0;
+                         pi < NUMBER_OF_OUTGOING_CONNECTIONS + NUMBER_OF_INCOMING_CONNECTIONS;
+                         pi++)
+                    {
+                        if (peers[pi].tcp4Protocol
+                            && peers[pi].isConnectedAccepted
+                            && !peers[pi].isClosing
+                            && peers[pi].peerReportedTick > nextTick)
+                        {
+                            networkAhead = true;
+                            break;
+                        }
+                    }
+                    if (haveTickData && networkAhead)
+                    {
+                        ts.tickData.acquireLock();
+                        setMem(&ts.tickData[idx], sizeof(TickData), 0);
+                        ts.tickData.releaseLock();
+                        auto* offsets = ts.tickTransactionOffsets.getByTickIndex(idx);
+                        if (offsets)
+                        {
+                            setMem(offsets,
+                                   NUMBER_OF_TRANSACTIONS_PER_TICK * sizeof(unsigned long long),
+                                   0);
+                        }
+                        setText(message, L"AUTO-FLUSH: stuck on tick ");
+                        appendNumber(message, system.tick, false);
+                        appendText(message, L" for >");
+                        appendNumber(message, autoFlushStuckSeconds, false);
+                        appendText(message, L"s, network ahead of tick ");
+                        appendNumber(message, nextTick, false);
+                        appendText(message, L"; wiped local tickData of ");
+                        appendNumber(message, nextTick, false);
+                        appendText(message, L" to force re-fetch.");
+                        logToConsole(message);
+                    }
+                }
+                // Reset timer so we don't spam (next attempt only after another threshold).
+                autoFlushLastTickTime = curTimeTick;
+            }
+        }
+
         if (broadcastedComputors.computors.epoch == system.epoch
             && ts.tickInCurrentEpochStorage(nextTick))
         {
@@ -7118,40 +7185,6 @@ static bool initialize()
 #else
         bool canLoadFromFile = false;
 #endif
-
-        // qli-diag: --flush-tick recovery. Wipe local tickData + transaction
-        // offsets for the requested tick(s) so the normal request loop will
-        // re-fetch them from peers. Runs here because the tick storage is
-        // fully initialized but the tick processor thread hasn't started yet,
-        // so this is race-free.
-        if (!flushTicksAtStartup.empty())
-        {
-            for (unsigned int t : flushTicksAtStartup)
-            {
-                if (!ts.tickInCurrentEpochStorage(t))
-                {
-                    setText(message, L"WARNING: --flush-tick ");
-                    appendNumber(message, t, false);
-                    appendText(message, L" is outside current epoch storage range, skipping.");
-                    logToConsole(message);
-                    continue;
-                }
-                const unsigned int idx = ts.tickToIndexCurrentEpoch(t);
-                ts.tickData.acquireLock();
-                setMem(&ts.tickData[idx], sizeof(TickData), 0);
-                ts.tickData.releaseLock();
-                auto* offsets = ts.tickTransactionOffsets.getByTickIndex(idx);
-                if (offsets)
-                {
-                    setMem(offsets, NUMBER_OF_TRANSACTIONS_PER_TICK * sizeof(unsigned long long), 0);
-                }
-                setText(message, L"Flushed local tickData + transaction offsets for tick ");
-                appendNumber(message, t, false);
-                appendText(message, L"; node will re-fetch from peers.");
-                logToConsole(message);
-            }
-            flushTicksAtStartup.clear();
-        }
 
         // if failed to load snapshot, load all data and init variables from scratch
         if (!canLoadFromFile)
@@ -9274,7 +9307,7 @@ void processArgs(int argc, const char* argv[]) {
         ("s,security-tick", "Core will verify state after x tick, to reduce computational to the node", cxxopts::value<int>()->default_value("1"))
         ("http-port", "Port for the built-in HTTP/RPC server to listen on", cxxopts::value<int>()->default_value("41841"))
         ("static-peers", "Run in static peer mode: do not add/remove peers, do not churn 25% of non-fullnode peers every 2 minutes, do not accept new incoming connections. Useful for nodes far from the network's center of mass where the default churn drops good peers before they're classified as fullnodes.")
-        ("flush-tick", "Comma-separated list of ticks whose local tickData + transaction offsets should be wiped at startup, forcing the node to re-fetch them from peers. Use to recover from a stuck node holding corrupt tickData (e.g. signature mismatch from a partial broadcast). Example: --flush-tick=55449245,55449246", cxxopts::value<std::string>());
+        ("auto-flush-stuck-seconds", "If the tick processor sits on the same system.tick for longer than N seconds, automatically wipe the local tickData of system.tick+1 so the request loop re-fetches it from peers. 0 disables. Reasonable production values: 60-120. Recovers automatically from corrupt-tickData stalls.", cxxopts::value<int>()->default_value("0"));
     auto result = options.parse(argc, argv);
 
     if (result.count("peers")) {
@@ -9327,24 +9360,13 @@ void processArgs(int argc, const char* argv[]) {
         logColorToScreen("INFO", "Security tick set to " + std::to_string(securityTick));
     }
 
-    if (result.count("flush-tick")) {
-        std::string s = result["flush-tick"].as<std::string>();
-        std::stringstream ss(s);
-        std::string tok;
-        while (std::getline(ss, tok, ',')) {
-            // trim whitespace
-            while (!tok.empty() && (tok.front() == ' ' || tok.front() == '\t')) tok.erase(tok.begin());
-            while (!tok.empty() && (tok.back() == ' ' || tok.back() == '\t')) tok.pop_back();
-            if (tok.empty()) continue;
-            try {
-                unsigned long val = std::stoul(tok);
-                flushTicksAtStartup.push_back(static_cast<unsigned int>(val));
-            } catch (...) {
-                logColorToScreen("ERROR", "Invalid tick number in --flush-tick: " + tok);
-                exit(1);
-            }
+    if (result.count("auto-flush-stuck-seconds")) {
+        autoFlushStuckSeconds = result["auto-flush-stuck-seconds"].as<int>();
+        if (autoFlushStuckSeconds < 0) autoFlushStuckSeconds = 0;
+        if (autoFlushStuckSeconds > 0) {
+            logColorToScreen("INFO", "Auto-flush stuck-tick recovery enabled after "
+                + std::to_string(autoFlushStuckSeconds) + "s on same tick");
         }
-        logColorToScreen("INFO", "Will flush " + std::to_string(flushTicksAtStartup.size()) + " tick(s) at startup");
     }
 
     if (result.count("ticking-delay")) {
