@@ -945,12 +945,14 @@ static void processReceivedData(unsigned int i, unsigned int salt)
                     numberOfReceivedBytes += peers[i].receiveData.DataLength;
                     *((unsigned long long*) & peers[i].receiveData.FragmentTable[0].FragmentBuffer) += peers[i].receiveData.DataLength;
 
-                iteration:
-                    unsigned int receivedDataSize = (unsigned int)(((unsigned long long)peers[i].receiveData.FragmentTable[0].FragmentBuffer) - ((unsigned long long)peers[i].receiveBuffer));
+                    // Parse every complete packet in place, advancing a read cursor per packet.
+                    const unsigned int totalReceivedSize = (unsigned int)(((unsigned long long)peers[i].receiveData.FragmentTable[0].FragmentBuffer) - ((unsigned long long)peers[i].receiveBuffer));
+                    unsigned int readOffset = 0;
+                    bool peerForgotten = false;
 
-                    if (receivedDataSize >= sizeof(RequestResponseHeader))
+                    while (totalReceivedSize - readOffset >= sizeof(RequestResponseHeader))
                     {
-                        RequestResponseHeader* requestResponseHeader = (RequestResponseHeader*)peers[i].receiveBuffer;
+                        RequestResponseHeader* requestResponseHeader = (RequestResponseHeader*)((char*)peers[i].receiveBuffer + readOffset);
                         if (requestResponseHeader->size() < sizeof(RequestResponseHeader))
                         {
                             // protocol violation -> forget peer
@@ -960,74 +962,85 @@ static void processReceivedData(unsigned int i, unsigned int salt)
                             logToConsole(message);
                             forgetPublicPeer(peers[i].address);
                             closePeer(&peers[i]);
+                            peerForgotten = true;
+                            break;
+                        }
+
+                        // Packet not fully received yet; stop and wait for more bytes.
+                        if (totalReceivedSize - readOffset < requestResponseHeader->size())
+                        {
+                            break;
+                        }
+
+                        // Compute saltId of packet with K12 of payload and header (size + type temporarily
+                        // overwritten with salt). This is used recognized and skip packet duplicates with
+                        // dejavu0 (checking/setting flag for received package). After receiving a certain
+                        // number of packages (DEJAVU_SWAP_LIMIT), dejavu0 is moved to dejavu1 for checking
+                        // and dejavu0 is initialized with an empty buffer for checking/setting.
+                        unsigned int saltedId;
+                        const unsigned int header = *((unsigned int*)requestResponseHeader);
+                        *((unsigned int*)requestResponseHeader) = salt;
+                        KangarooTwelve(requestResponseHeader, header & 0xFFFFFF, &saltedId, sizeof(saltedId));
+                        *((unsigned int*)requestResponseHeader) = header;
+                        // mask hash into allocated dejavu bit-range (no-op at 512 MB; required when LITE shrinks pool)
+                        saltedId &= (unsigned int)(DEJAVU_POOL_SIZE * 8ULL - 1);
+
+                        // Initiate transfer of already received packet to processing thread
+                        // (or drop it without processing if Dejavu filter tells to ignore it)
+                        if (!((dejavu0[saltedId >> 6] | dejavu1[saltedId >> 6]) & (1ULL << (saltedId & 63))))
+                        {
+                            if ((requestQueueBufferHead >= requestQueueBufferTail || requestQueueBufferHead + requestResponseHeader->size() < requestQueueBufferTail)
+                                && (unsigned short)(requestQueueElementHead + 1) != requestQueueElementTail)
+                            {
+                                dejavu0[saltedId >> 6] |= (1ULL << (saltedId & 63));
+
+                                ASSERT(requestQueueElementHead < REQUEST_QUEUE_LENGTH);
+                                ASSERT(requestQueueBufferHead < REQUEST_QUEUE_BUFFER_SIZE);
+                                ASSERT(requestQueueBufferHead + requestResponseHeader->size() < REQUEST_QUEUE_BUFFER_SIZE);
+
+                                requestQueueElements[requestQueueElementHead].offset = requestQueueBufferHead;
+                                copyMem(&requestQueueBuffer[requestQueueBufferHead], (char*)peers[i].receiveBuffer + readOffset, requestResponseHeader->size());
+                                requestQueueBufferHead += requestResponseHeader->size();
+                                requestQueueElements[requestQueueElementHead].peer = &peers[i];
+                                if (requestQueueBufferHead > REQUEST_QUEUE_BUFFER_SIZE - BUFFER_SIZE)
+                                {
+                                    requestQueueBufferHead = 0;
+                                }
+                                // TODO: Place a fence
+                                requestQueueElementHead++;
+
+                                if (!(--dejavuSwapCounter))
+                                {
+                                    unsigned long long* tmp = dejavu1;
+                                    dejavu1 = dejavu0;
+                                    setMem(dejavu0 = tmp, DEJAVU_POOL_SIZE, 0);
+                                    dejavuSwapCounter = DEJAVU_SWAP_LIMIT;
+                                }
+                            }
+                            else
+                            {
+                                _InterlockedIncrement64(&numberOfDiscardedRequests);
+
+                                enqueueResponse(&peers[i], 0, TryAgain::type(), requestResponseHeader->dejavu(), NULL);
+                            }
                         }
                         else
                         {
-                            if (receivedDataSize >= requestResponseHeader->size())
-                            {
-                                // Compute saltId of packet with K12 of payload and header (size + type temporarily
-                                // overwritten with salt). This is used recognized and skip packet duplicates with
-                                // dejavu0 (checking/setting flag for received package). After receiving a certain
-                                // number of packages (DEJAVU_SWAP_LIMIT), dejavu0 is moved to dejavu1 for checking
-                                // and dejavu0 is initialized with an empty buffer for checking/setting.
-                                unsigned int saltedId;
-                                const unsigned int header = *((unsigned int*)requestResponseHeader);
-                                *((unsigned int*)requestResponseHeader) = salt;
-                                KangarooTwelve(requestResponseHeader, header & 0xFFFFFF, &saltedId, sizeof(saltedId));
-                                *((unsigned int*)requestResponseHeader) = header;
-                                // mask hash into allocated dejavu bit-range (no-op at 512 MB; required when LITE shrinks pool)
-                                saltedId &= (unsigned int)(DEJAVU_POOL_SIZE * 8ULL - 1);
-
-                                // Initiate transfer of already received packet to processing thread
-                                // (or drop it without processing if Dejavu filter tells to ignore it)
-                                if (!((dejavu0[saltedId >> 6] | dejavu1[saltedId >> 6]) & (1ULL << (saltedId & 63))))
-                                {
-                                    if ((requestQueueBufferHead >= requestQueueBufferTail || requestQueueBufferHead + requestResponseHeader->size() < requestQueueBufferTail)
-                                        && (unsigned short)(requestQueueElementHead + 1) != requestQueueElementTail)
-                                    {
-                                        dejavu0[saltedId >> 6] |= (1ULL << (saltedId & 63));
-
-                                        ASSERT(requestQueueElementHead < REQUEST_QUEUE_LENGTH);
-                                        ASSERT(requestQueueBufferHead < REQUEST_QUEUE_BUFFER_SIZE);
-                                        ASSERT(requestQueueBufferHead + requestResponseHeader->size() < REQUEST_QUEUE_BUFFER_SIZE);
-
-                                        requestQueueElements[requestQueueElementHead].offset = requestQueueBufferHead;
-                                        copyMem(&requestQueueBuffer[requestQueueBufferHead], peers[i].receiveBuffer, requestResponseHeader->size());
-                                        requestQueueBufferHead += requestResponseHeader->size();
-                                        requestQueueElements[requestQueueElementHead].peer = &peers[i];
-                                        if (requestQueueBufferHead > REQUEST_QUEUE_BUFFER_SIZE - BUFFER_SIZE)
-                                        {
-                                            requestQueueBufferHead = 0;
-                                        }
-                                        // TODO: Place a fence
-                                        requestQueueElementHead++;
-
-                                        if (!(--dejavuSwapCounter))
-                                        {
-                                            unsigned long long* tmp = dejavu1;
-                                            dejavu1 = dejavu0;
-                                            setMem(dejavu0 = tmp, 536870912, 0);
-                                            dejavuSwapCounter = DEJAVU_SWAP_LIMIT;
-                                        }
-                                    }
-                                    else
-                                    {
-                                        _InterlockedIncrement64(&numberOfDiscardedRequests);
-
-                                        enqueueResponse(&peers[i], 0, TryAgain::type(), requestResponseHeader->dejavu(), NULL);
-                                    }
-                                }
-                                else
-                                {
-                                    _InterlockedIncrement64(&numberOfDuplicateRequests);
-                                }
-
-                                copyMem(peers[i].receiveBuffer, ((char*)peers[i].receiveBuffer) + requestResponseHeader->size(), receivedDataSize -= requestResponseHeader->size());
-                                peers[i].receiveData.FragmentTable[0].FragmentBuffer = ((char*)peers[i].receiveBuffer) + receivedDataSize;
-
-                                goto iteration;
-                            }
+                            _InterlockedIncrement64(&numberOfDuplicateRequests);
                         }
+
+                        readOffset += requestResponseHeader->size();
+                    }
+
+                    // Compact the unparsed remainder to the front once, then reposition the write cursor.
+                    if (!peerForgotten)
+                    {
+                        const unsigned int remainingSize = totalReceivedSize - readOffset;
+                        if (readOffset && remainingSize)
+                        {
+                            copyMem(peers[i].receiveBuffer, (char*)peers[i].receiveBuffer + readOffset, remainingSize);
+                        }
+                        peers[i].receiveData.FragmentTable[0].FragmentBuffer = (char*)peers[i].receiveBuffer + remainingSize;
                     }
                 }
             }
