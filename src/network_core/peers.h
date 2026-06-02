@@ -15,11 +15,6 @@
 #include "network_messages/header.h"
 #include "network_messages/common_response.h"
 
-// Operator-configured peer IPs from --peers / QUBIC_PEERS.  Defined in qubic.cpp,
-// declared here so the demotion-protection in penalizePublicPeerRejectedConnection
-// can recognize them as "operator trusted" and skip the penalty.
-extern std::vector<IPv4Address> knownPublicPeersDynamic;
-
 #include "tcp4.h"
 #include "kangaroo_twelve.h"
 
@@ -42,9 +37,7 @@ extern std::vector<IPv4Address> knownPublicPeersDynamic;
 #define NUMBER_OF_REGULAR_OUTGOING_CONNECTIONS 4
 #define NUMBER_OF_INCOMING_CONNECTIONS 4
 #else
-// Bumped from upstream 8 -> 16 to widen mesh sampling for edge/catch-up nodes.
-// Incoming stays at 176 (8 * 22 = 176 still satisfies the upstream 11:1 ratio).
-#define NUMBER_OF_REGULAR_OUTGOING_CONNECTIONS 16
+#define NUMBER_OF_REGULAR_OUTGOING_CONNECTIONS 8
 #define NUMBER_OF_INCOMING_CONNECTIONS 176
 #endif
 #define NUMBER_OF_OM_NODE_CONNECTIONS (sizeof(oracleMachineIPs) / sizeof(oracleMachineIPs[0]))
@@ -700,13 +693,6 @@ static bool isAddressInKnownPublicPeers(const IPv4Address& address)
         if (peer_ip == address)
             return true;
     }
-    // Also treat operator-configured --peers as known peers, so they survive
-    // peer-refresh churn and don't get demoted on transient connect rejects.
-    for (const IPv4Address& peer_ip : knownPublicPeersDynamic)
-    {
-        if (peer_ip == address)
-            return true;
-    }
     return false;
 }
 
@@ -746,10 +732,9 @@ static void forgetPublicPeer(const IPv4Address& address)
 // Penalize rejected connection by setting verified peer to non-verified or forgetting a non-verified peer
 static void penalizePublicPeerRejectedConnection(const IPv4Address& address)
 {
-    // Never demote operator-configured peers (baked-in knownPublicPeers + runtime
-    // --peers).  Transient connect rejects (peer's incoming slots full, momentary
-    // network blip) shouldn't strip the seed-quality flag from peers we explicitly
-    // chose to trust.
+    // Never demote baked-in knownPublicPeers (seed list). Transient connect
+    // rejects (peer's incoming slots full, momentary network blip) shouldn't
+    // strip the seed-quality flag from peers we explicitly chose to trust.
     if (isAddressInKnownPublicPeers(address))
         return;
 
