@@ -746,7 +746,7 @@ private:
         std::vector<unsigned char> compressed;
         if (gSwapCompressionEnabled)
         {
-            compressed = Zipper::zip(pageBuffer, pageSize, 1);
+            compressed = Zipper::zip(pageBuffer, pageSize, 4);
             saveBuffer = compressed.data();
             expectedSize = (unsigned long long)compressed.size();
         }
@@ -848,7 +848,7 @@ private:
                         long long readBytes = load(pageName, (unsigned long long)compressedSize, tmp.data(), pageDir);
                         if (readBytes == compressedSize)
                         {
-                            std::vector<unsigned char> decompressed = Zipper::unzip(tmp.data(), (size_t)compressedSize, 1);
+                            std::vector<unsigned char> decompressed = Zipper::unzip(tmp.data(), (size_t)compressedSize, 4);
                             if (decompressed.size() == pageSize)
                             {
                                 copyMem(cache[cache_page_id], decompressed.data(), pageSize);

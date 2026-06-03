@@ -9412,7 +9412,7 @@ void processArgs(int argc, const char* argv[]) {
 #ifdef __linux__
     if (result.count("swap-compression")) {
         gSwapCompressionEnabled = true;
-        logToConsole(L"SwapVM page compression ENABLED (blosc2)");
+        logColorToScreen("INFO", "Swap compression enabled: SwapVM disk pages will be compressed with blosc2 on save/load");
     }
 #endif
 
