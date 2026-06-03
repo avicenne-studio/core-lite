@@ -1064,6 +1064,7 @@ public:
 	struct GetLockedOrders_locals
 	{
 		uint32 i;
+		uint32 slot;
 		uint32 totalActive;
 		uint32 collected;
 		uint32 effectiveLimit;
@@ -1079,9 +1080,11 @@ public:
 		if (locals.effectiveLimit > QSB_QUERY_MAX_PAGE_SIZE)
 			locals.effectiveLimit = QSB_QUERY_MAX_PAGE_SIZE;
 		locals.collected = 0;
-		for (locals.i = 0; locals.i < state.get().lockedOrders.capacity(); ++locals.i)
+		// Iterate most-recent-first: start one slot before the next write position
+		for (locals.i = 0; locals.i < QSB_MAX_LOCKED_ORDERS; ++locals.i)
 		{
-			locals.entry = state.get().lockedOrders.get(locals.i);
+			locals.slot = (state.get().lastLockedOrdersNextOverwriteIdx + QSB_MAX_LOCKED_ORDERS - 1 - locals.i) & (QSB_MAX_LOCKED_ORDERS - 1);
+			locals.entry = state.get().lockedOrders.get(locals.slot);
 			if (!locals.entry.active)
 				continue;
 			++locals.totalActive;
@@ -1099,6 +1102,7 @@ public:
 	struct GetFilledOrders_locals
 	{
 		uint32 i;
+		uint32 slot;
 		uint32 totalActive;
 		uint32 collected;
 		uint32 effectiveLimit;
@@ -1114,9 +1118,11 @@ public:
 		if (locals.effectiveLimit > QSB_QUERY_MAX_PAGE_SIZE)
 			locals.effectiveLimit = QSB_QUERY_MAX_PAGE_SIZE;
 		locals.collected = 0;
-		for (locals.i = 0; locals.i < state.get().filledOrders.capacity(); ++locals.i)
+		// Iterate most-recent-first: start one slot before the next write position
+		for (locals.i = 0; locals.i < QSB_MAX_FILLED_ORDERS; ++locals.i)
 		{
-			locals.entry = state.get().filledOrders.get(locals.i);
+			locals.slot = (state.get().lastFilledOrdersNextOverwriteIdx + QSB_MAX_FILLED_ORDERS - 1 - locals.i) & (QSB_MAX_FILLED_ORDERS - 1);
+			locals.entry = state.get().filledOrders.get(locals.slot);
 			if (!locals.entry.used)
 				continue;
 			++locals.totalActive;

@@ -771,6 +771,27 @@ TEST(ContractTestingQSB, TestGetLockedOrders_Pagination)
     EXPECT_EQ(out.returned, 1u);
 }
 
+TEST(ContractTestingQSB, TestGetLockedOrders_MostRecentFirst)
+{
+    ContractTestingQSB test;
+
+    const uint64 amount = 1;
+    increaseEnergy(USER1, amount * 3);
+
+    // Lock 3 orders with nonces 10, 20, 30 (in that order)
+    test.lock(USER1, amount, 0, 1, 10, ContractTestingQSB::createZeroAddress(), amount);
+    test.lock(USER1, amount, 0, 1, 20, ContractTestingQSB::createZeroAddress(), amount);
+    test.lock(USER1, amount, 0, 1, 30, ContractTestingQSB::createZeroAddress(), amount);
+
+    // First page should be most-recent-first: nonce 30, 20, 10
+    QSB::GetLockedOrders_output out = test.getLockedOrders(0, 64);
+    EXPECT_EQ(out.totalActive, 3u);
+    EXPECT_EQ(out.returned, 3u);
+    EXPECT_EQ(out.entries.get(0).nonce, 30u);
+    EXPECT_EQ(out.entries.get(1).nonce, 20u);
+    EXPECT_EQ(out.entries.get(2).nonce, 10u);
+}
+
 TEST(ContractTestingQSB, TestGetFilledOrders_ReturnsEmptyWhenNoFills)
 {
     ContractTestingQSB test;
@@ -778,6 +799,28 @@ TEST(ContractTestingQSB, TestGetFilledOrders_ReturnsEmptyWhenNoFills)
     QSB::GetFilledOrders_output out = test.getFilledOrders(0, 64);
     EXPECT_EQ(out.totalActive, 0u);
     EXPECT_EQ(out.returned, 0u);
+}
+
+TEST(ContractTestingQSB, TestGetFilledOrders_MostRecentFirst)
+{
+    ContractTestingQSB test;
+
+    // Insert 3 hashes in order: [0x01], [0x02], [0x03]
+    for (uint32 i = 1; i <= 3; ++i)
+    {
+        QSB::OrderHash hash;
+        setMemory(hash, 0);
+        hash.set(0, (uint8)i);
+        test.getState()->forceMarkOrderFilled(hash);
+    }
+
+    // First page should be most-recent-first: 0x03, 0x02, 0x01
+    QSB::GetFilledOrders_output out = test.getFilledOrders(0, 64);
+    EXPECT_EQ(out.totalActive, 3u);
+    EXPECT_EQ(out.returned, 3u);
+    EXPECT_EQ(out.hashes.get(0).get(0), 3u);
+    EXPECT_EQ(out.hashes.get(1).get(0), 2u);
+    EXPECT_EQ(out.hashes.get(2).get(0), 1u);
 }
 
 TEST(ContractTestingQSB, TestFilledOrders_RingBufferOverwritesOldEntries)
