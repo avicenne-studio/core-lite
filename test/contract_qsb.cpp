@@ -1022,7 +1022,7 @@ TEST(ContractTestingQSB, TestLock_RingBufferOverwritesOldestSlot)
         ASSERT_TRUE(out.success);
     }
 
-    // Verify slot 0 holds nonce=0 (the first lock).
+    // Nonce 0 exists before overwrite.
     QSB::GetLockedOrder_output first = test.getLockedOrder(0);
     ASSERT_TRUE((bool)first.exists);
     EXPECT_EQ(first.order.nonce, 0u);
@@ -1032,10 +1032,14 @@ TEST(ContractTestingQSB, TestLock_RingBufferOverwritesOldestSlot)
     QSB::Lock_output overflow = test.lock(USER1, amount, 0, 1, QSB_MAX_LOCKED_ORDERS, ContractTestingQSB::createZeroAddress(), amount);
     EXPECT_TRUE(overflow.success);
 
-    // Slot 0 now holds the newest nonce.
-    QSB::GetLockedOrder_output overwritten = test.getLockedOrder(0);
-    ASSERT_TRUE((bool)overwritten.exists);
-    EXPECT_EQ(overwritten.order.nonce, QSB_MAX_LOCKED_ORDERS);
+    // Nonce 0 is gone: its slot was overwritten, GetLockedOrder searches by nonce.
+    QSB::GetLockedOrder_output evicted = test.getLockedOrder(0);
+    EXPECT_FALSE((bool)evicted.exists);
+
+    // The new nonce is findable.
+    QSB::GetLockedOrder_output newest = test.getLockedOrder(QSB_MAX_LOCKED_ORDERS);
+    ASSERT_TRUE((bool)newest.exists);
+    EXPECT_EQ(newest.order.nonce, QSB_MAX_LOCKED_ORDERS);
 }
 
 TEST(ContractTestingQSB, TestLock_FailsWhenNonceAlreadyUsedAndRefunds)
