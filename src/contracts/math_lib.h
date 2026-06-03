@@ -1,7 +1,8 @@
 // Basic math functions (not optimized but with minimal dependencies)
 
 #pragma once
-#include <lib/platform_common/qintrin.h> 
+#include <lib/platform_common/qintrin.h>
+#include "platform/msvc_polyfill.h" // smul() uses _mul128/_umul128 — polyfilled on non-MSVC
 
 namespace math_lib
 {
