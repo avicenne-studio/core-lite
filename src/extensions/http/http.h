@@ -19,6 +19,7 @@ static unsigned long long httpPasscodes[4] = {};
 #include "controller/rpc_queryv2_controller.h"
 #include "controller/rpc_live_controller.h"
 #include "controller/rpc_stats_controller.h"
+#include "controller/explorer_controller.h"
 #endif
 
 using namespace drogon;
@@ -745,7 +746,7 @@ private:
                 callback(resp);
             }, {drogon::Get});
 
-        app.run();
+        app.setThreadNum(std::thread::hardware_concurrency()).run();
     }
 public:
     static void start(int port = 41841)
