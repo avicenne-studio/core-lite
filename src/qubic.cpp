@@ -497,17 +497,6 @@ static bool isLastTickInEpoch() {
 #endif
 }
 
-static inline bool isBootstrappingConfiguredEpochFromScratch()
-{
-#if START_NETWORK_FROM_SCRATCH
-    // Use the configured EPOCH/TICK only for the initial bootstrap. Later
-    // epochs should follow the seamless transition path automatically.
-    return system.epoch == EPOCH;
-#else
-    return false;
-#endif
-}
-
 // NOTE: this function doesn't work well on a few CPUs, some bits will be flipped after calling this. It's probably microcode bug.
 static void enableAVX()
 {
@@ -3216,16 +3205,18 @@ static void processTick(unsigned long long processorNumber)
         // Here we still let prevDigests == digests of the last tick of last epoch
         // so that lite client can verify the state of spectrum
 
-        if (isBootstrappingConfiguredEpochFromScratch())
+ #if START_NETWORK_FROM_SCRATCH // only update it if the whole network starts from scratch
+        // everything starts from files, there is no previous tick of the last epoch
+        // thus, prevDigests are the digests of the files
+        if (system.epoch == EPOCH)
         {
-            // Everything starts from files, there is no previous tick of the
-            // last epoch, thus prevDigests are the digests of the files.
             etalonTick.prevResourceTestingDigest = resourceTestingDigest;
             etalonTick.prevSpectrumDigest = spectrumDigests[(SPECTRUM_CAPACITY * 2 - 1) - 1];
             getUniverseDigest(etalonTick.prevUniverseDigest);
             getComputerDigest(etalonTick.prevComputerDigest);
             etalonTick.prevTransactionBodyDigest = 0;
         }
+#endif
     }
     else
     {
@@ -4401,6 +4392,8 @@ static void endEpoch()
 }
 
 
+#if !START_NETWORK_FROM_SCRATCH
+
 static bool haveSamePrevDigestsAndTime(const Tick& A, const Tick& B)
 {
     return A.prevComputerDigest == B.prevComputerDigest &&
@@ -4503,6 +4496,7 @@ static void initializeFirstTick()
         _mm_pause();
     }
 }
+#endif
 
 #if TICK_STORAGE_AUTOSAVE_MODE
 
@@ -6007,13 +6001,13 @@ static void tickProcessor(void*, unsigned long long processorNumber)
 
     //const unsigned long long processorNumber = getRunningProcessorID();
 
-    // Only initialize the first tick from peers after the initial configured
-    // bootstrap epoch. The first local testnet start still begins from the
-    // configured EPOCH/TICK without requiring prior peers or snapshots.
-    if (!isBootstrappingConfiguredEpochFromScratch() && !loadAllNodeStateFromFile)
+#if !START_NETWORK_FROM_SCRATCH
+    // only init first tick if it doesn't load all node states from file
+    if (!loadAllNodeStateFromFile)
     {
         initializeFirstTick();
     }
+#endif
 
     loadAllNodeStateFromFile = false;
     unsigned int latestProcessedTick = 0;
@@ -7099,10 +7093,10 @@ static bool initialize()
             }
             if (!loadContractStateFiles() && (!canObmitLoadNodeState))
                 return false;
-            if (!isBootstrappingConfiguredEpochFromScratch()
-                && !loadContractExecFeeFiles()
-                && (!canObmitLoadNodeState))
+#if !START_NETWORK_FROM_SCRATCH
+            if (!loadContractExecFeeFiles() && (!canObmitLoadNodeState))
                 return false;
+#endif
 
 #ifdef INCLUDE_CONTRACT_TEST_EXAMPLES
             // fill execution fee reserves for test contracts
