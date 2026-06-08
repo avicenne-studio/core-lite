@@ -30,7 +30,8 @@ add_executable(
 		assets.cpp
    		common_def.cpp
    		contract_core.cpp
-   		contract_gqmprop.cpp
+		contract_gqmprop.cpp
+		contract_ggwp.cpp
    		contract_msvault.cpp
    		contract_nostromo.cpp
    		contract_qbay.cpp
