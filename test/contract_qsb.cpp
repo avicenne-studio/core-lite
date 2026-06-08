@@ -1137,6 +1137,54 @@ TEST(ContractTestingQSB, TestOverrideLock_OrderNotFound)
     EXPECT_FALSE(output.success);
 }
 
+TEST(ContractTestingQSB, TestOverrideLock_CounterIncrements)
+{
+    ContractTestingQSB test;
+
+    const uint64 amount = 1000000;
+    const uint64 relayerFee = 10000;
+    const uint32 nonce = 77;
+
+    increaseEnergy(USER1, amount);
+    test.lock(USER1, amount, relayerFee, 1, nonce, ContractTestingQSB::createZeroAddress(), amount);
+
+    // Counter starts at 0
+    EXPECT_EQ(test.getLockedOrder(nonce).order.overrideLockCount, 0u);
+
+    // Each successful override increments the counter
+    EXPECT_TRUE(test.overrideLock(USER1, nonce, 100, ContractTestingQSB::createZeroAddress()).success);
+    EXPECT_EQ(test.getLockedOrder(nonce).order.overrideLockCount, 1u);
+
+    EXPECT_TRUE(test.overrideLock(USER1, nonce, 200, ContractTestingQSB::createZeroAddress()).success);
+    EXPECT_EQ(test.getLockedOrder(nonce).order.overrideLockCount, 2u);
+
+    EXPECT_TRUE(test.overrideLock(USER1, nonce, 300, ContractTestingQSB::createZeroAddress()).success);
+    EXPECT_EQ(test.getLockedOrder(nonce).order.overrideLockCount, 3u);
+}
+
+TEST(ContractTestingQSB, TestOverrideLock_BlockedAfterMaxAttempts)
+{
+    ContractTestingQSB test;
+
+    const uint64 amount = 1000000;
+    const uint64 relayerFee = 10000;
+    const uint32 nonce = 78;
+
+    increaseEnergy(USER1, amount);
+    test.lock(USER1, amount, relayerFee, 1, nonce, ContractTestingQSB::createZeroAddress(), amount);
+
+    // Three overrides succeed
+    EXPECT_TRUE(test.overrideLock(USER1, nonce, 100, ContractTestingQSB::createZeroAddress()).success);
+    EXPECT_TRUE(test.overrideLock(USER1, nonce, 200, ContractTestingQSB::createZeroAddress()).success);
+    EXPECT_TRUE(test.overrideLock(USER1, nonce, 300, ContractTestingQSB::createZeroAddress()).success);
+
+    // Fourth attempt is blocked
+    QSB::OverrideLock_output blocked = test.overrideLock(USER1, nonce, 400, ContractTestingQSB::createZeroAddress());
+    EXPECT_FALSE(blocked.success);
+    // Counter must not have advanced
+    EXPECT_EQ(test.getLockedOrder(nonce).order.overrideLockCount, 3u);
+}
+
 // ============================================================================
 // Admin Function Tests
 // ============================================================================

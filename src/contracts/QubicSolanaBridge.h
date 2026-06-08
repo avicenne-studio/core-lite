@@ -10,6 +10,7 @@ static constexpr uint32 QSB_MAX_FILLED_ORDERS = 256; // QPI::Array requires powe
 static constexpr uint32 QSB_MAX_LOCKED_ORDERS = 1024;
 static constexpr uint32 QSB_MAX_BPS_FEE = 1000;      // max 10% fee (1000 / 10000)
 static constexpr uint32 QSB_MAX_PROTOCOL_FEE = 100;  // max 100% of bps fee
+static constexpr uint8 QSB_OVERRIDE_LOCK_MAX_ATTEMPTS = 3;
 
 // Domain-prefixed order message for K12 hashing and signature verification.
 // Layout: 245 bytes total. protocolName is padded to 16 (next power of 2 above 11).
@@ -70,7 +71,8 @@ static constexpr uint8 QSBReasonEraMismatch = 20;
 static constexpr uint8 QSBReasonInvalidAdmin = 21;
 static constexpr uint8 QSBReasonInvalidRole = 22;
 static constexpr uint8 QSBReasonOrderNotFound = 23;
-// 21 reserved for future use
+static constexpr uint8 QSBReasonOverrideLimitReached = 24;
+// 20 reserved for future use
 
 struct QSB2
 {
@@ -141,6 +143,7 @@ public:
 		uint32 lockEpoch;
 		uint32 orderEra;
 		bit active;
+		uint8 overrideLockCount;  // at +161; 6 bytes padding follow to keep struct at 168 bytes
 	};
 
 	// Logging messages
@@ -837,6 +840,7 @@ public:
 		locals.entry.orderHash = output.orderHash;
 		locals.entry.lockEpoch = qpi.epoch();
 		locals.entry.orderEra = state.get().orderEra;
+		locals.entry.overrideLockCount = 0;
 		state.mut().lockedOrders.set(state.get().lastLockedOrdersNextOverwriteIdx, locals.entry);
 		state.mut().lastLockedOrdersNextOverwriteIdx = (state.get().lastLockedOrdersNextOverwriteIdx + 1) & (QSB_MAX_LOCKED_ORDERS - 1);
 
@@ -908,6 +912,14 @@ public:
 			return;
 		}
 
+		// Enforce per-order override attempt cap
+		if (locals.entry.overrideLockCount >= QSB_OVERRIDE_LOCK_MAX_ATTEMPTS)
+		{
+			locals.logMsg.reasonCode = QSBReasonOverrideLimitReached;
+			LOG_INFO(locals.logMsg);
+			return;
+		}
+
 		// Validate new relayer fee
 		if (input.relayerFee >= locals.entry.amount)
 		{
@@ -942,6 +954,7 @@ public:
 		locals.logMsg.orderHash = locals.entry.orderHash;
 		locals.logMsg.orderEra = locals.entry.orderEra;
 
+		locals.entry.overrideLockCount++;
 		state.mut().lockedOrders.set((uint32)locals.idx, locals.entry);
 		output.success = true;
 		copyFromBuffer(locals.logMsg.to, input.toAddress);
