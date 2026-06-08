@@ -11,6 +11,7 @@ static constexpr uint32 QSB_MAX_LOCKED_ORDERS = 1024;
 static constexpr uint32 QSB_MAX_BPS_FEE = 1000;      // max 10% fee (1000 / 10000)
 static constexpr uint32 QSB_MAX_PROTOCOL_FEE = 100;  // max 100% of bps fee
 static constexpr uint8 QSB_OVERRIDE_LOCK_MAX_ATTEMPTS = 3;
+static constexpr uint32 QSB_MAX_UNLOCK_SIGNATURES = 8; // max sigs per Unlock call; keeps Unlock_input ≤ 1024 bytes
 
 // Domain-prefixed order message for K12 hashing and signature verification.
 // Layout: 245 bytes total. protocolName is padded to 16 (next power of 2 above 11).
@@ -293,7 +294,7 @@ public:
 	{
 		Order order;
 		uint32 numSignatures;
-		Array<SignatureData, QSB_MAX_ORACLES> signatures;
+		Array<SignatureData, QSB_MAX_UNLOCK_SIGNATURES> signatures;
 	};
 
 	struct Unlock_output

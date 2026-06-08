@@ -277,11 +277,13 @@ public:
     {
         QSB::Unlock_input input;
         QSB::Unlock_output output;
-        
+
         input.order = order;
         input.numSignatures = numSignatures;
-        copyMemory(input.signatures, signatures);
-        
+        uint32 toCopy = numSignatures < QSB_MAX_UNLOCK_SIGNATURES ? numSignatures : QSB_MAX_UNLOCK_SIGNATURES;
+        for (uint32 i = 0; i < toCopy; i++)
+            input.signatures.set(i, signatures.get(i));
+
         invokeUserProcedure(QSB_CONTRACT_INDEX, 3, input, output, user, 0);
         return output;
     }
