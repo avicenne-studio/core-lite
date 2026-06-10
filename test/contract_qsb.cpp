@@ -122,7 +122,16 @@ public:
         initEmptyUniverse();
         INIT_CONTRACT(QSB);
         callSystemProcedure(QSB_CONTRACT_INDEX, INITIALIZE);
-        // INITIALIZE sets ADMIN (slot 0) and ADMIN2 (slot 1) with threshold=2.
+        // Override admins to use stable test identities (ADMIN/ADMIN2) so all test
+        // logic remains independent of the live-deployment keys in INITIALIZE.
+        {
+            auto* s = (QSB::StateData*)contractStates[QSB_CONTRACT_INDEX];
+            setMemory(s->admins, 0);
+            s->admins.set(0, ADMIN);
+            s->admins.set(1, ADMIN2);
+            s->adminCount = 2;
+            s->adminThreshold = 2;
+        }
         checkContractExecCleanup();
     }
 
@@ -570,8 +579,6 @@ TEST(ContractTestingQSB, TestGetConfig_ReturnsInitialState)
 
     EXPECT_EQ(config.adminCount, 2);
     EXPECT_EQ(config.adminThreshold, 2);
-    EXPECT_EQ(config.admins.get(0), ADMIN);
-    EXPECT_EQ(config.admins.get(1), ADMIN2);
     EXPECT_EQ(config.protocolFeeRecipient, NULL_ID);
     EXPECT_EQ(config.oracleFeeRecipient, NULL_ID);
     EXPECT_EQ(config.bpsFee, 0u);
@@ -966,8 +973,6 @@ TEST(ContractTestingQSB, TestInitialization)
     // Check initial state
     test.getState()->checkAdminCount(2);
     test.getState()->checkAdminThreshold(2);
-    test.getState()->checkIsAdmin(ADMIN);
-    test.getState()->checkIsAdmin(ADMIN2);
     test.getState()->checkPaused(false);
     test.getState()->checkOracleThreshold(67); // Default 67%
     test.getState()->checkOracleCount(0);

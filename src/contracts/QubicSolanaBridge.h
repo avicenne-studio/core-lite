@@ -2177,12 +2177,12 @@ protected:
 	INITIALIZE()
 	{
 		// Multisig admin setup — 2-of-2 from deployment.
-		// Replace both keys with real production keys before mainnet deployment.
-		// Admin 0: id(100, 200, 300, 400)  — test key, matches ADMIN in contract_qsb.cpp
-		// Admin 1: id(101, 201, 301, 401)  — test key, matches ADMIN2 in contract_qsb.cpp
+		// Keys correspond to oracle/.temp/qubic-admin.keys.json (slot 0)
+		// and oracle/.temp/qubic-admin-2.keys.json (slot 1).
+		// oracle/.temp/qubic-admin-3.keys.json is added via proposal during QA.
 		setMemory(state.mut().admins, 0);
-		state.mut().admins.set(0, id(100ULL, 200ULL, 300ULL, 400ULL));
-		state.mut().admins.set(1, id(101ULL, 201ULL, 301ULL, 401ULL));
+		state.mut().admins.set(0, id(11994886480163374182ULL, 7222723150474050185ULL, 4187743050690849231ULL, 4967671197750064684ULL));
+		state.mut().admins.set(1, id(1491071035376662822ULL, 7392187382213737082ULL, 14591294638558326625ULL, 12799863271090897602ULL));
 		state.mut().adminCount = 2;
 		state.mut().adminThreshold = 2;
 		setMemory(state.mut().proposals, 0);

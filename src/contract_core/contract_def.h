@@ -423,7 +423,7 @@ constexpr struct ContractDescription
     {"QUSINO", 208, 10000, sizeof(QUSINO::StateData)}, // proposal in epoch 206, IPO in 207, construction and first use in 208
     {"ESCROW", 210, 10000, sizeof(ESCROW::StateData)}, // proposal in epoch 208, IPO in 209, construction and first use in 210
     {"GGWP", 217, 10000, sizeof(WOLFPACK::StateData)}, // proposal in epoch 215, IPO in 216, construction and first use in 217
-    {"QSB", 212, 10000, sizeof(QSB::StateData)}, // local testnet: constructionEpoch <= testnet epoch to skip IPO
+    {"QSB", 216, 10000, sizeof(QSB::StateData)}, // local testnet: align constructionEpoch with current testnet epoch so INITIALIZE runs on clean reset
     // new contracts should be added above this line
 #ifdef INCLUDE_CONTRACT_TEST_EXAMPLES
     {"TESTEXA", 138, 10000, sizeof(TESTEXA::StateData)},
