@@ -661,6 +661,497 @@ public:
 
 protected:
 	// ---------------------------------------------------------------------
+	// Procedure result structs
+	// ---------------------------------------------------------------------
+
+	struct LockResult
+	{
+		bit success;
+		uint8 reasonCode;
+		OrderHash orderHash;
+		uint32 orderEra;
+	};
+
+	struct OverrideLockResult
+	{
+		bit success;
+		uint8 reasonCode;
+		OrderHash orderHash;
+		uint64 amount;
+		uint64 relayerFee;
+		uint32 networkOut;
+		uint32 orderEra;
+	};
+
+	struct UnlockResult
+	{
+		bit success;
+		uint8 reasonCode;
+		OrderHash orderHash;
+	};
+
+	struct ProposeResult
+	{
+		bit success;
+		uint8 reasonCode;
+		uint8 proposalId;
+	};
+
+	struct ApproveProposalResult
+	{
+		bit success;
+		bit executed;
+		uint8 reasonCode;
+		uint8 proposalType;
+		id proposer;
+		uint8 approvalCount;
+	};
+
+	struct CancelProposalResult
+	{
+		bit success;
+		uint8 reasonCode;
+		uint8 proposalType;
+		id proposer;
+		uint8 approvalCount;
+	};
+
+	struct PauseResult
+	{
+		bit success;
+		uint8 reasonCode;
+	};
+
+public:
+	// ---------------------------------------------------------------------
+	// Core user procedures
+	// ---------------------------------------------------------------------
+
+	struct Lock_locals
+	{
+		LockResult result;
+		QSBLogLockMessage logMsg;
+	};
+
+	PUBLIC_PROCEDURE_WITH_LOCALS(Lock)
+	{
+		locals.result = tryLock(qpi, state, input);
+		output.success = locals.result.success;
+		output.orderHash = locals.result.orderHash;
+
+		locals.logMsg._contractIndex = SELF_INDEX;
+		locals.logMsg._type = QSBLogLock;
+		locals.logMsg.from = qpi.invocator();
+		copyFromBuffer(locals.logMsg.to, input.toAddress);
+		locals.logMsg.amount = input.amount;
+		locals.logMsg.relayerFee = input.relayerFee;
+		locals.logMsg.networkOut = input.networkOut;
+		locals.logMsg.nonce = input.nonce;
+		locals.logMsg.orderHash = locals.result.orderHash;
+		locals.logMsg.success = locals.result.success ? 1 : 0;
+		locals.logMsg.reasonCode = locals.result.reasonCode;
+		locals.logMsg.orderEra = locals.result.orderEra;
+		locals.logMsg._terminator = 0;
+		LOG_INFO(locals.logMsg);
+	}
+
+	struct OverrideLock_locals
+	{
+		OverrideLockResult result;
+		QSBLogOverrideLockMessage logMsg;
+	};
+
+	PUBLIC_PROCEDURE_WITH_LOCALS(OverrideLock)
+	{
+		locals.result = tryOverrideLock(qpi, state, input);
+		output.success = locals.result.success;
+		output.orderHash = locals.result.orderHash;
+
+		locals.logMsg._contractIndex = SELF_INDEX;
+		locals.logMsg._type = QSBLogOverrideLock;
+		locals.logMsg.from = qpi.invocator();
+		setMemory(locals.logMsg.to, 0);
+		if (locals.result.success)
+			copyFromBuffer(locals.logMsg.to, input.toAddress);
+		locals.logMsg.amount = locals.result.amount;
+		locals.logMsg.relayerFee = locals.result.relayerFee;
+		locals.logMsg.networkOut = locals.result.networkOut;
+		locals.logMsg.nonce = input.nonce;
+		locals.logMsg.orderHash = locals.result.orderHash;
+		locals.logMsg.success = locals.result.success ? 1 : 0;
+		locals.logMsg.reasonCode = locals.result.reasonCode;
+		locals.logMsg.orderEra = locals.result.orderEra;
+		locals.logMsg._terminator = 0;
+		LOG_INFO(locals.logMsg);
+	}
+
+	struct Unlock_locals
+	{
+		UnlockResult result;
+		QSBLogUnlockMessage logMsg;
+	};
+
+	PUBLIC_PROCEDURE_WITH_LOCALS(Unlock)
+	{
+		locals.result = tryUnlock(qpi, state, input);
+		output.success = locals.result.success;
+		output.orderHash = locals.result.orderHash;
+
+		locals.logMsg._contractIndex = SELF_INDEX;
+		locals.logMsg._type = QSBLogUnlock;
+		locals.logMsg.orderHash = locals.result.orderHash;
+		locals.logMsg.toAddress = input.order.toAddress;
+		locals.logMsg.amount = input.order.amount;
+		locals.logMsg.relayerFee = input.order.relayerFee;
+		locals.logMsg.relayer = qpi.invocator();
+		locals.logMsg.success = locals.result.success ? 1 : 0;
+		locals.logMsg.reasonCode = locals.result.reasonCode;
+		locals.logMsg.orderEra = input.order.orderEra;
+		locals.logMsg._terminator = 0;
+		LOG_INFO(locals.logMsg);
+	}
+
+	// View functions
+	PUBLIC_FUNCTION(GetConfig)
+	{
+		output.adminCount = state.get().adminCount;
+		output.adminThreshold = state.get().adminThreshold;
+		output.admins = state.get().admins;
+		output.protocolFeeRecipient = state.get().protocolFeeRecipient;
+		output.oracleFeeRecipient = state.get().oracleFeeRecipient;
+		output.bpsFee = state.get().bpsFee;
+		output.protocolFee = state.get().protocolFee;
+		output.oracleCount = state.get().oracleCount;
+		output.pauserCount = state.get().pauserCount;
+		output.oracleThreshold = state.get().oracleThreshold;
+		output.paused = state.get().paused;
+		output.orderEra = state.get().orderEra;
+	}
+
+	PUBLIC_FUNCTION(GetProposal)
+	{
+		output.exists = false;
+		if (input.proposalId < QSB_MAX_PROPOSALS)
+		{
+			output.proposal = state.get().proposals.get(input.proposalId);
+			output.exists = output.proposal.active;
+		}
+	}
+
+	struct GetProposals_locals
+	{
+		uint32 i;
+		AdminProposal prop;
+	};
+	
+	PUBLIC_FUNCTION_WITH_LOCALS(GetProposals)
+	{
+		output.count = 0;
+		setMemory(output.proposals, 0);
+		for (locals.i = 0; locals.i < QSB_MAX_PROPOSALS; ++locals.i)
+		{
+			locals.prop = state.get().proposals.get(locals.i);
+			if (locals.prop.active)
+			{
+				output.proposals.set(output.count, locals.prop);
+				++output.count;
+			}
+		}
+	}
+
+	PUBLIC_FUNCTION(IsOracle)
+	{
+		output.isOracle = (findOracleIndex(state, input.account) != NULL_INDEX);
+	}
+
+	PUBLIC_FUNCTION(IsPauser)
+	{
+		output.isPauser = (findPauserIndex(state, input.account) != NULL_INDEX);
+	}
+
+	struct GetLockedOrder_locals
+	{
+		sint64 idx;
+	};
+
+	PUBLIC_FUNCTION_WITH_LOCALS(GetLockedOrder)
+	{
+		locals.idx = findLockedOrderIndexByNonce(state, input.nonce);
+		output.exists = (locals.idx != NULL_INDEX);
+		if (output.exists)
+			output.order = state.get().lockedOrders.get((uint32)locals.idx);
+	}
+
+	PUBLIC_FUNCTION(IsOrderFilled)
+	{
+		output.filled = isOrderFilled(state, input.hash);
+	}
+
+	struct ComputeOrderHash_locals
+	{
+		id digest;
+		QSBOrderMessage msgBuffer;
+		OrderHash tmpIdBytes;
+	};
+
+	PUBLIC_FUNCTION_WITH_LOCALS(ComputeOrderHash)
+	{
+		buildOrderMessage(locals.msgBuffer, input.order, locals.tmpIdBytes);
+		locals.digest = qpi.K12(locals.msgBuffer);
+		output.hash.setMem(locals.digest);
+	}
+
+	struct GetOracles_locals
+	{
+		uint32 i;
+		RoleEntry entry;
+	};
+
+	PUBLIC_FUNCTION_WITH_LOCALS(GetOracles)
+	{
+		output.count = 0;
+		setMemory(output.accounts, 0);
+		for (locals.i = 0; locals.i < state.get().oracles.capacity() && output.count < output.accounts.capacity(); ++locals.i)
+		{
+			locals.entry = state.get().oracles.get(locals.i);
+			if (locals.entry.active)
+			{
+				output.accounts.set(output.count, locals.entry.account);
+				++output.count;
+			}
+		}
+	}
+
+	struct GetPausers_locals
+	{
+		uint32 i;
+		RoleEntry entry;
+	};
+
+	PUBLIC_FUNCTION_WITH_LOCALS(GetPausers)
+	{
+		output.count = 0;
+		setMemory(output.accounts, 0);
+		for (locals.i = 0; locals.i < state.get().pausers.capacity() && output.count < output.accounts.capacity(); ++locals.i)
+		{
+			locals.entry = state.get().pausers.get(locals.i);
+			if (locals.entry.active)
+			{
+				output.accounts.set(output.count, locals.entry.account);
+				++output.count;
+			}
+		}
+	}
+
+	struct GetLockedOrders_locals
+	{
+		uint32 i;
+		uint32 slot;
+		uint32 totalActive;
+		uint32 collected;
+		uint32 effectiveLimit;
+		LockedOrderEntry entry;
+	};
+
+	PUBLIC_FUNCTION_WITH_LOCALS(GetLockedOrders)
+	{
+		output.totalActive = 0;
+		output.returned = 0;
+		setMemory(output.entries, 0);
+		locals.effectiveLimit = input.limit;
+		if (locals.effectiveLimit > QSB_QUERY_MAX_PAGE_SIZE)
+			locals.effectiveLimit = QSB_QUERY_MAX_PAGE_SIZE;
+		locals.collected = 0;
+		// Iterate most-recent-first: start one slot before the next write position
+		for (locals.i = 0; locals.i < QSB_MAX_LOCKED_ORDERS; ++locals.i)
+		{
+			locals.slot = (state.get().lastLockedOrdersNextOverwriteIdx + QSB_MAX_LOCKED_ORDERS - 1 - locals.i) & (QSB_MAX_LOCKED_ORDERS - 1);
+			locals.entry = state.get().lockedOrders.get(locals.slot);
+			if (!locals.entry.active)
+				continue;
+			++locals.totalActive;
+			if (locals.totalActive <= input.offset)
+				continue;
+			if (locals.collected >= locals.effectiveLimit)
+				continue;
+			output.entries.set(locals.collected, locals.entry);
+			++locals.collected;
+		}
+		output.totalActive = locals.totalActive;
+		output.returned = locals.collected;
+	}
+
+	struct GetFilledOrders_locals
+	{
+		uint32 i;
+		uint32 slot;
+		uint32 totalActive;
+		uint32 collected;
+		uint32 effectiveLimit;
+		FilledOrderEntry entry;
+	};
+
+	PUBLIC_FUNCTION_WITH_LOCALS(GetFilledOrders)
+	{
+		output.totalActive = 0;
+		output.returned = 0;
+		setMemory(output.hashes, 0);
+		locals.effectiveLimit = input.limit;
+		if (locals.effectiveLimit > QSB_QUERY_MAX_PAGE_SIZE)
+			locals.effectiveLimit = QSB_QUERY_MAX_PAGE_SIZE;
+		locals.collected = 0;
+		// Iterate most-recent-first: start one slot before the next write position
+		for (locals.i = 0; locals.i < QSB_MAX_FILLED_ORDERS; ++locals.i)
+		{
+			locals.slot = (state.get().lastFilledOrdersNextOverwriteIdx + QSB_MAX_FILLED_ORDERS - 1 - locals.i) & (QSB_MAX_FILLED_ORDERS - 1);
+			locals.entry = state.get().filledOrders.get(locals.slot);
+			if (!locals.entry.used)
+				continue;
+			++locals.totalActive;
+			if (locals.totalActive <= input.offset)
+				continue;
+			if (locals.collected >= locals.effectiveLimit)
+				continue;
+			output.hashes.set(locals.collected, locals.entry.hash);
+			++locals.collected;
+		}
+		output.totalActive = locals.totalActive;
+		output.returned = locals.collected;
+	}
+
+	// ---------------------------------------------------------------------
+	// Admin procedures (multisig)
+	// ---------------------------------------------------------------------
+
+	struct Propose_locals
+	{
+		ProposeResult result;
+		QSBLogProposalMessage logMsg;
+	};
+
+	PUBLIC_PROCEDURE_WITH_LOCALS(Propose)
+	{
+		locals.result = tryPropose(qpi, state, input);
+		output.success = locals.result.success;
+		output.reasonCode = locals.result.reasonCode;
+		output.proposalId = locals.result.proposalId;
+
+		locals.logMsg._contractIndex = SELF_INDEX;
+		locals.logMsg._type = QSBLogProposalCreated;
+		locals.logMsg.proposalId = output.proposalId;
+		locals.logMsg.proposalType = input.proposalType;
+		locals.logMsg.proposer = qpi.invocator();
+		locals.logMsg.actor = qpi.invocator();
+		locals.logMsg.approvalCount = 1;
+		locals.logMsg.success = output.success ? 1 : 0;
+		locals.logMsg.reasonCode = output.reasonCode;
+		locals.logMsg._terminator = 0;
+		LOG_INFO(locals.logMsg);
+	}
+
+	struct ApproveProposal_locals
+	{
+		ApproveProposalResult result;
+		QSBLogProposalMessage logMsg;
+	};
+
+	PUBLIC_PROCEDURE_WITH_LOCALS(ApproveProposal)
+	{
+		locals.result = tryApproveProposal(qpi, state, input);
+		output.success = locals.result.success;
+		output.executed = locals.result.executed;
+		output.reasonCode = locals.result.reasonCode;
+
+		locals.logMsg._contractIndex = SELF_INDEX;
+		locals.logMsg._type = locals.result.executed ? QSBLogProposalExecuted : QSBLogProposalApproved;
+		locals.logMsg.proposalId = input.proposalId;
+		locals.logMsg.proposalType = locals.result.proposalType;
+		locals.logMsg.proposer = locals.result.proposer;
+		locals.logMsg.actor = qpi.invocator();
+		locals.logMsg.approvalCount = locals.result.approvalCount;
+		locals.logMsg.success = output.success ? 1 : 0;
+		locals.logMsg.reasonCode = output.reasonCode;
+		locals.logMsg._terminator = 0;
+		LOG_INFO(locals.logMsg);
+	}
+
+	struct CancelProposal_locals
+	{
+		CancelProposalResult result;
+		QSBLogProposalMessage logMsg;
+	};
+
+	PUBLIC_PROCEDURE_WITH_LOCALS(CancelProposal)
+	{
+		locals.result = tryCancelProposal(qpi, state, input);
+		output.success = locals.result.success;
+		output.reasonCode = locals.result.reasonCode;
+
+		locals.logMsg._contractIndex = SELF_INDEX;
+		locals.logMsg._type = QSBLogProposalCancelled;
+		locals.logMsg.proposalId = input.proposalId;
+		locals.logMsg.proposalType = locals.result.proposalType;
+		locals.logMsg.proposer = locals.result.proposer;
+		locals.logMsg.actor = qpi.invocator();
+		locals.logMsg.approvalCount = locals.result.approvalCount;
+		locals.logMsg.success = output.success ? 1 : 0;
+		locals.logMsg.reasonCode = output.reasonCode;
+		locals.logMsg._terminator = 0;
+		LOG_INFO(locals.logMsg);
+	}
+
+	struct Pause_locals
+	{
+		PauseResult result;
+		QSBLogPausedMessage logMsg;
+	};
+
+	PUBLIC_PROCEDURE_WITH_LOCALS(Pause)
+	{
+		locals.result = tryPause(qpi, state);
+		output.success = locals.result.success;
+
+		locals.logMsg._contractIndex = SELF_INDEX;
+		locals.logMsg._type = QSBLogPaused;
+		locals.logMsg.caller = qpi.invocator();
+		locals.logMsg.success = output.success ? 1 : 0;
+		locals.logMsg.reasonCode = locals.result.reasonCode;
+		locals.logMsg._terminator = 0;
+		LOG_INFO(locals.logMsg);
+	}
+
+	REGISTER_USER_FUNCTIONS_AND_PROCEDURES()
+	{
+		// View functions
+		REGISTER_USER_FUNCTION(GetConfig, 1);
+		REGISTER_USER_FUNCTION(IsOracle, 2);
+		REGISTER_USER_FUNCTION(IsPauser, 3);
+		REGISTER_USER_FUNCTION(GetLockedOrder, 4);
+		REGISTER_USER_FUNCTION(IsOrderFilled, 5);
+		REGISTER_USER_FUNCTION(ComputeOrderHash, 6);
+		REGISTER_USER_FUNCTION(GetOracles, 7);
+		REGISTER_USER_FUNCTION(GetPausers, 8);
+		REGISTER_USER_FUNCTION(GetLockedOrders, 9);
+		REGISTER_USER_FUNCTION(GetFilledOrders, 10);
+		REGISTER_USER_FUNCTION(GetProposal, 11);
+		REGISTER_USER_FUNCTION(GetProposals, 12);
+
+		// User procedures
+		REGISTER_USER_PROCEDURE(Lock, 1);
+		REGISTER_USER_PROCEDURE(OverrideLock, 2);
+		REGISTER_USER_PROCEDURE(Unlock, 3);
+
+		// Emergency pause — single-key, any admin or pauser
+		REGISTER_USER_PROCEDURE(Pause, 14);
+
+		// Multisig admin procedures
+		REGISTER_USER_PROCEDURE(Propose, 20);
+		REGISTER_USER_PROCEDURE(ApproveProposal, 21);
+		REGISTER_USER_PROCEDURE(CancelProposal, 22);
+	}
+
+protected:
+	// ---------------------------------------------------------------------
 	// Low-level helpers
 	// ---------------------------------------------------------------------
 
@@ -1031,68 +1522,6 @@ protected:
 			}
 		}
 	}
-
-	// ---------------------------------------------------------------------
-	// Procedure result structs
-	// ---------------------------------------------------------------------
-
-	struct LockResult
-	{
-		bit success;
-		uint8 reasonCode;
-		OrderHash orderHash;
-		uint32 orderEra;
-	};
-
-	struct OverrideLockResult
-	{
-		bit success;
-		uint8 reasonCode;
-		OrderHash orderHash;
-		uint64 amount;
-		uint64 relayerFee;
-		uint32 networkOut;
-		uint32 orderEra;
-	};
-
-	struct UnlockResult
-	{
-		bit success;
-		uint8 reasonCode;
-		OrderHash orderHash;
-	};
-
-	struct ProposeResult
-	{
-		bit success;
-		uint8 reasonCode;
-		uint8 proposalId;
-	};
-
-	struct ApproveProposalResult
-	{
-		bit success;
-		bit executed;
-		uint8 reasonCode;
-		uint8 proposalType;
-		id proposer;
-		uint8 approvalCount;
-	};
-
-	struct CancelProposalResult
-	{
-		bit success;
-		uint8 reasonCode;
-		uint8 proposalType;
-		id proposer;
-		uint8 approvalCount;
-	};
-
-	struct PauseResult
-	{
-		bit success;
-		uint8 reasonCode;
-	};
 
 	// ---------------------------------------------------------------------
 	// Procedure logic helpers (try*)
@@ -1771,432 +2200,6 @@ protected:
 		return result;
 	}
 
-public:
-	// ---------------------------------------------------------------------
-	// Core user procedures
-	// ---------------------------------------------------------------------
-
-	struct Lock_locals
-	{
-		LockResult result;
-		QSBLogLockMessage logMsg;
-	};
-
-	PUBLIC_PROCEDURE_WITH_LOCALS(Lock)
-	{
-		locals.result = tryLock(qpi, state, input);
-		output.success = locals.result.success;
-		output.orderHash = locals.result.orderHash;
-
-		locals.logMsg._contractIndex = SELF_INDEX;
-		locals.logMsg._type = QSBLogLock;
-		locals.logMsg.from = qpi.invocator();
-		copyFromBuffer(locals.logMsg.to, input.toAddress);
-		locals.logMsg.amount = input.amount;
-		locals.logMsg.relayerFee = input.relayerFee;
-		locals.logMsg.networkOut = input.networkOut;
-		locals.logMsg.nonce = input.nonce;
-		locals.logMsg.orderHash = locals.result.orderHash;
-		locals.logMsg.success = locals.result.success ? 1 : 0;
-		locals.logMsg.reasonCode = locals.result.reasonCode;
-		locals.logMsg.orderEra = locals.result.orderEra;
-		locals.logMsg._terminator = 0;
-		LOG_INFO(locals.logMsg);
-	}
-
-	struct OverrideLock_locals
-	{
-		OverrideLockResult result;
-		QSBLogOverrideLockMessage logMsg;
-	};
-
-	PUBLIC_PROCEDURE_WITH_LOCALS(OverrideLock)
-	{
-		locals.result = tryOverrideLock(qpi, state, input);
-		output.success = locals.result.success;
-		output.orderHash = locals.result.orderHash;
-
-		locals.logMsg._contractIndex = SELF_INDEX;
-		locals.logMsg._type = QSBLogOverrideLock;
-		locals.logMsg.from = qpi.invocator();
-		setMemory(locals.logMsg.to, 0);
-		if (locals.result.success)
-			copyFromBuffer(locals.logMsg.to, input.toAddress);
-		locals.logMsg.amount = locals.result.amount;
-		locals.logMsg.relayerFee = locals.result.relayerFee;
-		locals.logMsg.networkOut = locals.result.networkOut;
-		locals.logMsg.nonce = input.nonce;
-		locals.logMsg.orderHash = locals.result.orderHash;
-		locals.logMsg.success = locals.result.success ? 1 : 0;
-		locals.logMsg.reasonCode = locals.result.reasonCode;
-		locals.logMsg.orderEra = locals.result.orderEra;
-		locals.logMsg._terminator = 0;
-		LOG_INFO(locals.logMsg);
-	}
-
-	struct Unlock_locals
-	{
-		UnlockResult result;
-		QSBLogUnlockMessage logMsg;
-	};
-
-	PUBLIC_PROCEDURE_WITH_LOCALS(Unlock)
-	{
-		locals.result = tryUnlock(qpi, state, input);
-		output.success = locals.result.success;
-		output.orderHash = locals.result.orderHash;
-
-		locals.logMsg._contractIndex = SELF_INDEX;
-		locals.logMsg._type = QSBLogUnlock;
-		locals.logMsg.orderHash = locals.result.orderHash;
-		locals.logMsg.toAddress = input.order.toAddress;
-		locals.logMsg.amount = input.order.amount;
-		locals.logMsg.relayerFee = input.order.relayerFee;
-		locals.logMsg.relayer = qpi.invocator();
-		locals.logMsg.success = locals.result.success ? 1 : 0;
-		locals.logMsg.reasonCode = locals.result.reasonCode;
-		locals.logMsg.orderEra = input.order.orderEra;
-		locals.logMsg._terminator = 0;
-		LOG_INFO(locals.logMsg);
-	}
-
-	// View functions
-	PUBLIC_FUNCTION(GetConfig)
-	{
-		output.adminCount = state.get().adminCount;
-		output.adminThreshold = state.get().adminThreshold;
-		output.admins = state.get().admins;
-		output.protocolFeeRecipient = state.get().protocolFeeRecipient;
-		output.oracleFeeRecipient = state.get().oracleFeeRecipient;
-		output.bpsFee = state.get().bpsFee;
-		output.protocolFee = state.get().protocolFee;
-		output.oracleCount = state.get().oracleCount;
-		output.pauserCount = state.get().pauserCount;
-		output.oracleThreshold = state.get().oracleThreshold;
-		output.paused = state.get().paused;
-		output.orderEra = state.get().orderEra;
-	}
-
-	PUBLIC_FUNCTION(GetProposal)
-	{
-		output.exists = false;
-		if (input.proposalId < QSB_MAX_PROPOSALS)
-		{
-			output.proposal = state.get().proposals.get(input.proposalId);
-			output.exists = output.proposal.active;
-		}
-	}
-
-	struct GetProposals_locals
-	{
-		uint32 i;
-		AdminProposal prop;
-	};
-	PUBLIC_FUNCTION_WITH_LOCALS(GetProposals)
-	{
-		output.count = 0;
-		setMemory(output.proposals, 0);
-		for (locals.i = 0; locals.i < QSB_MAX_PROPOSALS; ++locals.i)
-		{
-			locals.prop = state.get().proposals.get(locals.i);
-			if (locals.prop.active)
-			{
-				output.proposals.set(output.count, locals.prop);
-				++output.count;
-			}
-		}
-	}
-
-	PUBLIC_FUNCTION(IsOracle)
-	{
-		output.isOracle = (findOracleIndex(state, input.account) != NULL_INDEX);
-	}
-
-	PUBLIC_FUNCTION(IsPauser)
-	{
-		output.isPauser = (findPauserIndex(state, input.account) != NULL_INDEX);
-	}
-
-	struct GetLockedOrder_locals
-	{
-		sint64 idx;
-	};
-
-	PUBLIC_FUNCTION_WITH_LOCALS(GetLockedOrder)
-	{
-		locals.idx = findLockedOrderIndexByNonce(state, input.nonce);
-		output.exists = (locals.idx != NULL_INDEX);
-		if (output.exists)
-			output.order = state.get().lockedOrders.get((uint32)locals.idx);
-	}
-
-	PUBLIC_FUNCTION(IsOrderFilled)
-	{
-		output.filled = isOrderFilled(state, input.hash);
-	}
-
-	struct ComputeOrderHash_locals
-	{
-		id digest;
-		QSBOrderMessage msgBuffer;
-		OrderHash tmpIdBytes;
-	};
-
-	PUBLIC_FUNCTION_WITH_LOCALS(ComputeOrderHash)
-	{
-		buildOrderMessage(locals.msgBuffer, input.order, locals.tmpIdBytes);
-		locals.digest = qpi.K12(locals.msgBuffer);
-		output.hash.setMem(locals.digest);
-	}
-
-	struct GetOracles_locals
-	{
-		uint32 i;
-		RoleEntry entry;
-	};
-
-	PUBLIC_FUNCTION_WITH_LOCALS(GetOracles)
-	{
-		output.count = 0;
-		setMemory(output.accounts, 0);
-		for (locals.i = 0; locals.i < state.get().oracles.capacity() && output.count < output.accounts.capacity(); ++locals.i)
-		{
-			locals.entry = state.get().oracles.get(locals.i);
-			if (locals.entry.active)
-			{
-				output.accounts.set(output.count, locals.entry.account);
-				++output.count;
-			}
-		}
-	}
-
-	struct GetPausers_locals
-	{
-		uint32 i;
-		RoleEntry entry;
-	};
-
-	PUBLIC_FUNCTION_WITH_LOCALS(GetPausers)
-	{
-		output.count = 0;
-		setMemory(output.accounts, 0);
-		for (locals.i = 0; locals.i < state.get().pausers.capacity() && output.count < output.accounts.capacity(); ++locals.i)
-		{
-			locals.entry = state.get().pausers.get(locals.i);
-			if (locals.entry.active)
-			{
-				output.accounts.set(output.count, locals.entry.account);
-				++output.count;
-			}
-		}
-	}
-
-	struct GetLockedOrders_locals
-	{
-		uint32 i;
-		uint32 slot;
-		uint32 totalActive;
-		uint32 collected;
-		uint32 effectiveLimit;
-		LockedOrderEntry entry;
-	};
-
-	PUBLIC_FUNCTION_WITH_LOCALS(GetLockedOrders)
-	{
-		output.totalActive = 0;
-		output.returned = 0;
-		setMemory(output.entries, 0);
-		locals.effectiveLimit = input.limit;
-		if (locals.effectiveLimit > QSB_QUERY_MAX_PAGE_SIZE)
-			locals.effectiveLimit = QSB_QUERY_MAX_PAGE_SIZE;
-		locals.collected = 0;
-		// Iterate most-recent-first: start one slot before the next write position
-		for (locals.i = 0; locals.i < QSB_MAX_LOCKED_ORDERS; ++locals.i)
-		{
-			locals.slot = (state.get().lastLockedOrdersNextOverwriteIdx + QSB_MAX_LOCKED_ORDERS - 1 - locals.i) & (QSB_MAX_LOCKED_ORDERS - 1);
-			locals.entry = state.get().lockedOrders.get(locals.slot);
-			if (!locals.entry.active)
-				continue;
-			++locals.totalActive;
-			if (locals.totalActive <= input.offset)
-				continue;
-			if (locals.collected >= locals.effectiveLimit)
-				continue;
-			output.entries.set(locals.collected, locals.entry);
-			++locals.collected;
-		}
-		output.totalActive = locals.totalActive;
-		output.returned = locals.collected;
-	}
-
-	struct GetFilledOrders_locals
-	{
-		uint32 i;
-		uint32 slot;
-		uint32 totalActive;
-		uint32 collected;
-		uint32 effectiveLimit;
-		FilledOrderEntry entry;
-	};
-
-	PUBLIC_FUNCTION_WITH_LOCALS(GetFilledOrders)
-	{
-		output.totalActive = 0;
-		output.returned = 0;
-		setMemory(output.hashes, 0);
-		locals.effectiveLimit = input.limit;
-		if (locals.effectiveLimit > QSB_QUERY_MAX_PAGE_SIZE)
-			locals.effectiveLimit = QSB_QUERY_MAX_PAGE_SIZE;
-		locals.collected = 0;
-		// Iterate most-recent-first: start one slot before the next write position
-		for (locals.i = 0; locals.i < QSB_MAX_FILLED_ORDERS; ++locals.i)
-		{
-			locals.slot = (state.get().lastFilledOrdersNextOverwriteIdx + QSB_MAX_FILLED_ORDERS - 1 - locals.i) & (QSB_MAX_FILLED_ORDERS - 1);
-			locals.entry = state.get().filledOrders.get(locals.slot);
-			if (!locals.entry.used)
-				continue;
-			++locals.totalActive;
-			if (locals.totalActive <= input.offset)
-				continue;
-			if (locals.collected >= locals.effectiveLimit)
-				continue;
-			output.hashes.set(locals.collected, locals.entry.hash);
-			++locals.collected;
-		}
-		output.totalActive = locals.totalActive;
-		output.returned = locals.collected;
-	}
-
-	// ---------------------------------------------------------------------
-	// Admin procedures (multisig)
-	// ---------------------------------------------------------------------
-
-	struct Propose_locals
-	{
-		ProposeResult result;
-		QSBLogProposalMessage logMsg;
-	};
-
-	PUBLIC_PROCEDURE_WITH_LOCALS(Propose)
-	{
-		locals.result = tryPropose(qpi, state, input);
-		output.success = locals.result.success;
-		output.reasonCode = locals.result.reasonCode;
-		output.proposalId = locals.result.proposalId;
-
-		locals.logMsg._contractIndex = SELF_INDEX;
-		locals.logMsg._type = QSBLogProposalCreated;
-		locals.logMsg.proposalId = output.proposalId;
-		locals.logMsg.proposalType = input.proposalType;
-		locals.logMsg.proposer = qpi.invocator();
-		locals.logMsg.actor = qpi.invocator();
-		locals.logMsg.approvalCount = 1;
-		locals.logMsg.success = output.success ? 1 : 0;
-		locals.logMsg.reasonCode = output.reasonCode;
-		locals.logMsg._terminator = 0;
-		LOG_INFO(locals.logMsg);
-	}
-
-	struct ApproveProposal_locals
-	{
-		ApproveProposalResult result;
-		QSBLogProposalMessage logMsg;
-	};
-
-	PUBLIC_PROCEDURE_WITH_LOCALS(ApproveProposal)
-	{
-		locals.result = tryApproveProposal(qpi, state, input);
-		output.success = locals.result.success;
-		output.executed = locals.result.executed;
-		output.reasonCode = locals.result.reasonCode;
-
-		locals.logMsg._contractIndex = SELF_INDEX;
-		locals.logMsg._type = locals.result.executed ? QSBLogProposalExecuted : QSBLogProposalApproved;
-		locals.logMsg.proposalId = input.proposalId;
-		locals.logMsg.proposalType = locals.result.proposalType;
-		locals.logMsg.proposer = locals.result.proposer;
-		locals.logMsg.actor = qpi.invocator();
-		locals.logMsg.approvalCount = locals.result.approvalCount;
-		locals.logMsg.success = output.success ? 1 : 0;
-		locals.logMsg.reasonCode = output.reasonCode;
-		locals.logMsg._terminator = 0;
-		LOG_INFO(locals.logMsg);
-	}
-
-	struct CancelProposal_locals
-	{
-		CancelProposalResult result;
-		QSBLogProposalMessage logMsg;
-	};
-
-	PUBLIC_PROCEDURE_WITH_LOCALS(CancelProposal)
-	{
-		locals.result = tryCancelProposal(qpi, state, input);
-		output.success = locals.result.success;
-		output.reasonCode = locals.result.reasonCode;
-
-		locals.logMsg._contractIndex = SELF_INDEX;
-		locals.logMsg._type = QSBLogProposalCancelled;
-		locals.logMsg.proposalId = input.proposalId;
-		locals.logMsg.proposalType = locals.result.proposalType;
-		locals.logMsg.proposer = locals.result.proposer;
-		locals.logMsg.actor = qpi.invocator();
-		locals.logMsg.approvalCount = locals.result.approvalCount;
-		locals.logMsg.success = output.success ? 1 : 0;
-		locals.logMsg.reasonCode = output.reasonCode;
-		locals.logMsg._terminator = 0;
-		LOG_INFO(locals.logMsg);
-	}
-
-	struct Pause_locals
-	{
-		PauseResult result;
-		QSBLogPausedMessage logMsg;
-	};
-
-	PUBLIC_PROCEDURE_WITH_LOCALS(Pause)
-	{
-		locals.result = tryPause(qpi, state);
-		output.success = locals.result.success;
-
-		locals.logMsg._contractIndex = SELF_INDEX;
-		locals.logMsg._type = QSBLogPaused;
-		locals.logMsg.caller = qpi.invocator();
-		locals.logMsg.success = output.success ? 1 : 0;
-		locals.logMsg.reasonCode = locals.result.reasonCode;
-		locals.logMsg._terminator = 0;
-		LOG_INFO(locals.logMsg);
-	}
-
-	REGISTER_USER_FUNCTIONS_AND_PROCEDURES()
-	{
-		// View functions
-		REGISTER_USER_FUNCTION(GetConfig, 1);
-		REGISTER_USER_FUNCTION(IsOracle, 2);
-		REGISTER_USER_FUNCTION(IsPauser, 3);
-		REGISTER_USER_FUNCTION(GetLockedOrder, 4);
-		REGISTER_USER_FUNCTION(IsOrderFilled, 5);
-		REGISTER_USER_FUNCTION(ComputeOrderHash, 6);
-		REGISTER_USER_FUNCTION(GetOracles, 7);
-		REGISTER_USER_FUNCTION(GetPausers, 8);
-		REGISTER_USER_FUNCTION(GetLockedOrders, 9);
-		REGISTER_USER_FUNCTION(GetFilledOrders, 10);
-		REGISTER_USER_FUNCTION(GetProposal, 11);
-		REGISTER_USER_FUNCTION(GetProposals, 12);
-
-		// User procedures
-		REGISTER_USER_PROCEDURE(Lock, 1);
-		REGISTER_USER_PROCEDURE(OverrideLock, 2);
-		REGISTER_USER_PROCEDURE(Unlock, 3);
-
-		// Emergency pause — single-key, any admin or pauser
-		REGISTER_USER_PROCEDURE(Pause, 14);
-
-		// Multisig admin procedures
-		REGISTER_USER_PROCEDURE(Propose, 20);
-		REGISTER_USER_PROCEDURE(ApproveProposal, 21);
-		REGISTER_USER_PROCEDURE(CancelProposal, 22);
-	}
 
 	// ---------------------------------------------------------------------
 	// Epoch processing
