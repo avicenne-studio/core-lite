@@ -51,13 +51,11 @@ static constexpr uint32 QSBLogProposalApproved = 12;
 static constexpr uint32 QSBLogProposalExecuted = 13;
 static constexpr uint32 QSBLogProposalCancelled = 14;
 
-// Multisig admin constants
 static constexpr uint32 QSB_MAX_ADMINS = 8; // approvedMask is uint8; must stay ≤ 8
 static constexpr uint32 QSB_MAX_PROPOSALS = 16;
 static constexpr uint32 QSB_MAX_PROPOSALS_PER_ADMIN = 3;
 static constexpr uint32 QSB_PROPOSAL_EXPIRY_EPOCHS = 4; // ~4 weeks
 
-// Proposal types
 static constexpr uint8 QSBPropAddAdmin = 1;
 static constexpr uint8 QSBPropRemoveAdmin = 2;
 static constexpr uint8 QSBPropSetAdminThreshold = 3;
@@ -67,7 +65,6 @@ static constexpr uint8 QSBPropEditOracleThreshold = 6;
 static constexpr uint8 QSBPropEditFeeParameters = 7;
 static constexpr uint8 QSBPropUnpause = 8;
 
-// Generic reason codes for logging
 static constexpr uint8 QSBReasonNone = 0;
 static constexpr uint8 QSBReasonPaused = 1;
 static constexpr uint8 QSBReasonInvalidAmount = 2;
@@ -93,7 +90,6 @@ static constexpr uint8 QSBReasonInvalidAdmin = 21;
 static constexpr uint8 QSBReasonInvalidRole = 22;
 static constexpr uint8 QSBReasonOrderNotFound = 23;
 static constexpr uint8 QSBReasonOverrideLimitReached = 24;
-// Multisig admin reason codes
 static constexpr uint8 QSBReasonProposalNotFound = 25;
 static constexpr uint8 QSBReasonProposalExpired = 26;
 static constexpr uint8 QSBReasonAlreadyApproved = 27;
@@ -112,7 +108,6 @@ struct QSB2
 struct QSB : public ContractBase
 {
 public:
-	// Role identifiers for addRole / removeRole
 	enum class Role : uint8
 	{
 		Oracle = 1,
@@ -137,7 +132,6 @@ public:
 		uint32 orderEra;
 	};
 
-	// Compact order-hash representation (K12 digest)
 	typedef Array<uint8, 32> OrderHash;
 
 	// Signature wrapper compatible with QPI::signatureValidity
@@ -147,21 +141,18 @@ public:
 		Array<sint8, 64> signature; // raw 64-byte signature
 	};
 
-	// Storage entry for filledOrders mapping
 	struct FilledOrderEntry
 	{
 		OrderHash hash;
 		bit used;
 	};
 
-	// Storage entry for role mappings (oracles / pausers)
 	struct RoleEntry
 	{
 		id account;
 		bit active;
 	};
 
-	// Storage entry for lock() orders (for overrideLock / off-chain reference)
 	struct LockedOrderEntry
 	{
 		id sender;
@@ -177,7 +168,6 @@ public:
 		uint8 overrideLockCount; // at +161; 6 bytes padding follow to keep struct at 168 bytes
 	};
 
-	// Logging messages
 	struct QSBLogLockMessage
 	{
 		uint32 _contractIndex;
@@ -311,7 +301,6 @@ public:
 		uint8 approvalCount; // cached popcount of approvedMask
 		uint8 approvedMask;	 // bit i = admins[i] approved (max 8 admins)
 
-		// Payload — fields used depend on proposalType
 		id targetId;			  // AddAdmin, RemoveAdmin, AddRole/RemoveRole account
 		uint8 role;				  // AddRole, RemoveRole: (uint8)Role::Oracle or Role::Pauser
 		uint8 newAdminThreshold;  // SetAdminThreshold
@@ -326,7 +315,6 @@ public:
 	// User-facing I/O structures
 	// ---------------------------------------------------------------------
 
-	// 1) lock()
 	struct Lock_input
 	{
 		uint64 amount;
@@ -342,7 +330,6 @@ public:
 		bit success;
 	};
 
-	// 2) overrideLock()
 	struct OverrideLock_input
 	{
 		Array<uint8, 64> toAddress;
@@ -356,7 +343,6 @@ public:
 		bit success;
 	};
 
-	// 3) unlock()
 	struct Unlock_input
 	{
 		Order order;
@@ -370,7 +356,6 @@ public:
 		bit success;
 	};
 
-	// 4) transferAdmin()
 	struct TransferAdmin_input
 	{
 		id newAdmin;
@@ -381,7 +366,6 @@ public:
 		bit success;
 	};
 
-	// 5) editOracleThreshold()
 	struct EditOracleThreshold_input
 	{
 		uint8 newThreshold;
@@ -393,7 +377,6 @@ public:
 		bit success;
 	};
 
-	// 6) addRole()
 	struct AddRole_input
 	{
 		id account;
@@ -405,7 +388,6 @@ public:
 		bit success;
 	};
 
-	// 7) removeRole()
 	struct RemoveRole_input
 	{
 		id account;
@@ -417,7 +399,6 @@ public:
 		bit success;
 	};
 
-	// 8) pause() / unpause()
 	struct Pause_input
 	{
 	};
@@ -430,7 +411,6 @@ public:
 	typedef Pause_input Unpause_input;
 	typedef Pause_output Unpause_output;
 
-	// 9) editFeeParameters()
 	struct EditFeeParameters_input
 	{
 		id protocolFeeRecipient; // updated when not zero-id
@@ -444,7 +424,6 @@ public:
 		bit success;
 	};
 
-	// Propose: create a typed admin proposal (proposer auto-approves)
 	struct Propose_input
 	{
 		uint8 proposalType;
@@ -569,7 +548,6 @@ public:
 		bit filled;
 	};
 
-	// ComputeOrderHash: canonical hash for Unlock verification
 	struct ComputeOrderHash_input
 	{
 		Order order;
@@ -580,7 +558,6 @@ public:
 		OrderHash hash;
 	};
 
-	// GetOracles: bulk enumeration of all oracle accounts
 	struct GetOracles_input
 	{
 	};
@@ -591,7 +568,6 @@ public:
 		Array<id, QSB_MAX_ORACLES> accounts;
 	};
 
-	// GetPausers: bulk enumeration of all pauser accounts
 	struct GetPausers_input
 	{
 	};
@@ -602,7 +578,6 @@ public:
 		Array<id, QSB_MAX_PAUSERS> accounts;
 	};
 
-	// GetLockedOrders: paginated enumeration of active locked orders
 	struct GetLockedOrders_input
 	{
 		uint32 offset; // skip this many active entries
@@ -616,7 +591,6 @@ public:
 		Array<LockedOrderEntry, QSB_QUERY_MAX_PAGE_SIZE> entries;
 	};
 
-	// GetFilledOrders: paginated enumeration of filled order hashes
 	struct GetFilledOrders_input
 	{
 		uint32 offset; // skip this many filled entries
@@ -635,7 +609,6 @@ public:
 	// ---------------------------------------------------------------------
 	struct StateData
 	{
-		// Multisig admin (replaces single `id admin`)
 		Array<id, QSB_MAX_ADMINS> admins; // zero entry = empty slot
 		uint8 adminCount;				  // number of active admins
 		uint8 adminThreshold;			  // M in M-of-N (always ≥ 1, always ≤ adminCount)
@@ -811,7 +784,6 @@ public:
 		LOG_INFO(locals.logMsg);
 	}
 
-	// View functions
 	PUBLIC_FUNCTION(GetConfig)
 	{
 		output.adminCount = state.get().adminCount;
@@ -1122,7 +1094,6 @@ public:
 
 	REGISTER_USER_FUNCTIONS_AND_PROCEDURES()
 	{
-		// View functions
 		REGISTER_USER_FUNCTION(GetConfig, 1);
 		REGISTER_USER_FUNCTION(IsOracle, 2);
 		REGISTER_USER_FUNCTION(IsPauser, 3);
@@ -1136,15 +1107,12 @@ public:
 		REGISTER_USER_FUNCTION(GetProposal, 11);
 		REGISTER_USER_FUNCTION(GetProposals, 12);
 
-		// User procedures
 		REGISTER_USER_PROCEDURE(Lock, 1);
 		REGISTER_USER_PROCEDURE(OverrideLock, 2);
 		REGISTER_USER_PROCEDURE(Unlock, 3);
 
-		// Emergency pause — single-key, any admin or pauser
 		REGISTER_USER_PROCEDURE(Pause, 14);
 
-		// Multisig admin procedures
 		REGISTER_USER_PROCEDURE(Propose, 20);
 		REGISTER_USER_PROCEDURE(ApproveProposal, 21);
 		REGISTER_USER_PROCEDURE(CancelProposal, 22);
@@ -1250,7 +1218,6 @@ protected:
 		return false;
 	}
 
-	// Cancel all pending proposals — called when the admin set changes to invalidate stale votes.
 	inline static void cancelAllPendingProposals(QPI::ContractState<StateData, CONTRACT_INDEX> &state)
 	{
 		AdminProposal prop;
@@ -1265,7 +1232,6 @@ protected:
 		}
 	}
 
-	// Pure state mutation — no qpi access.
 	inline static bool executeProposalPayload(QPI::ContractState<StateData, CONTRACT_INDEX> &state, const AdminProposal &prop)
 	{
 		uint32 i;
@@ -1410,7 +1376,6 @@ protected:
 		return NULL_INDEX;
 	}
 
-	// Idempotent insert into ring-buffer filled-order storage.
 	inline static void markOrderFilled(QPI::ContractState<StateData, CONTRACT_INDEX> &state, const OrderHash &hash)
 	{
 		uint32 i, j;
@@ -1506,7 +1471,6 @@ protected:
 		return NULL_INDEX;
 	}
 
-	// Sweep expired proposals — called from END_EPOCH.
 	inline static void sweepExpiredProposals(
 		const QPI::QpiContextProcedureCall &qpi,
 		QPI::ContractState<StateData, CONTRACT_INDEX> &state)
@@ -1822,21 +1786,17 @@ protected:
 			return result;
 		}
 
-		// bpsFeeAmount = netAmount * bpsFee / 10000
 		uint64 netAmount = input.order.amount - input.order.relayerFee;
 		tmpMul = uint128(netAmount) * uint128(state.get().bpsFee);
 		tmpMul2 = div(tmpMul, uint128(10000));
 		uint64 bpsFeeAmount = (uint64)tmpMul2.low;
 
-		// protocolFeeAmount = bpsFeeAmount * protocolFee / 100
 		tmpMul = uint128(bpsFeeAmount) * uint128(state.get().protocolFee);
 		tmpMul2 = div(tmpMul, uint128(100));
 		uint64 protocolFeeAmount = (uint64)tmpMul2.low;
 
-		// oracleFeeAmount = bpsFeeAmount - protocolFeeAmount
 		uint64 oracleFeeAmount = (bpsFeeAmount >= protocolFeeAmount) ? bpsFeeAmount - protocolFeeAmount : 0;
 
-		// recipientAmount = netAmount - bpsFeeAmount
 		uint64 recipientAmount = (netAmount >= bpsFeeAmount) ? netAmount - bpsFeeAmount : 0;
 
 		// Mark filled BEFORE transfers to prevent replay on partial transfer failure.
@@ -1845,7 +1805,6 @@ protected:
 
 		bool allTransfersOk = true;
 
-		// Recipient payout first (most important transfer)
 		if (recipientAmount > 0 && !isZero(input.order.toAddress))
 		{
 			if (qpi.transfer(input.order.toAddress, (sint64)recipientAmount) < 0)
@@ -1987,7 +1946,6 @@ protected:
 			return result;
 		}
 
-		// Enforce per-admin concurrent proposal cap
 		uint8 adminProposalCount = 0;
 		AdminProposal prop;
 		for (uint32 i = 0; i < QSB_MAX_PROPOSALS; ++i)
