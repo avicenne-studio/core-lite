@@ -93,9 +93,7 @@ public:
     // Helper to mark an order hash as filled via the internal ring buffer logic.
     void forceMarkOrderFilled(const QSB::OrderHash& hash)
     {
-        FilledOrderEntry entry;
-        bool same = false;
-        markOrderFilled(asMutState(), hash, 0, 0, same, entry);
+        markOrderFilled(asMutState(), hash);
     }
 
     // Directly write an active locked order entry into a slot (bypasses contract call overhead).
