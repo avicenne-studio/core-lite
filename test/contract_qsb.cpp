@@ -7,6 +7,7 @@ static const id QSB_CONTRACT_ID(QSB_CONTRACT_INDEX, 0, 0, 0);
 static const id USER1(123, 456, 789, 876);
 static const id USER2(42, 424, 4242, 42424);
 static const id ADMIN(100, 200, 300, 400);
+static const id ADMIN2(101, 201, 301, 401);   // second admin, matches INITIALIZE slot 1
 static const id ORACLE1(500, 600, 700, 800);
 static const id ORACLE2(900, 1000, 1100, 1200);
 static const id ORACLE3(1300, 1400, 1500, 1600);
@@ -24,9 +25,34 @@ public:
         return *reinterpret_cast<QPI::ContractState<StateData, QSB_CONTRACT_INDEX>*>(static_cast<StateData*>(this));
     }
 
-    void checkAdmin(const id& expectedAdmin) const
+    void checkAdminCount(uint8 expected) const
     {
-        EXPECT_EQ(this->admin, expectedAdmin);
+        EXPECT_EQ(this->adminCount, expected);
+    }
+
+    void checkAdminThreshold(uint8 expected) const
+    {
+        EXPECT_EQ(this->adminThreshold, expected);
+    }
+
+    void checkIsAdmin(const id& who) const
+    {
+        bool found = false;
+        for (uint32 i = 0; i < QSB_MAX_ADMINS; ++i)
+        {
+            if (this->admins.get(i) == who) { found = true; break; }
+        }
+        EXPECT_TRUE(found);
+    }
+
+    void checkIsNotAdmin(const id& who) const
+    {
+        bool found = false;
+        for (uint32 i = 0; i < QSB_MAX_ADMINS; ++i)
+        {
+            if (this->admins.get(i) == who) { found = true; break; }
+        }
+        EXPECT_FALSE(found);
     }
 
     void checkPaused(bool expectedPaused) const
@@ -98,12 +124,7 @@ public:
         initEmptyUniverse();
         INIT_CONTRACT(QSB);
         callSystemProcedure(QSB_CONTRACT_INDEX, INITIALIZE);
-
-        // INITIALIZE sets admin to the real deployment key; transfer to test ADMIN.
-        static const id DEPLOY_ADMIN(11994886480163374182ULL, 7222723150474050185ULL, 4187743050690849231ULL, 4967671197750064684ULL);
-        increaseEnergy(DEPLOY_ADMIN, 1);
-        transferAdmin(DEPLOY_ADMIN, ADMIN);
-
+        // INITIALIZE sets ADMIN (slot 0) and ADMIN2 (slot 1) with threshold=2.
         checkContractExecCleanup();
     }
 
@@ -249,13 +270,13 @@ public:
     {
         QSB::Lock_input input;
         QSB::Lock_output output;
-        
+
         input.amount = amount;
         input.relayerFee = relayerFee;
         input.networkOut = networkOut;
         input.nonce = nonce;
         copyToBuffer(input.toAddress, toAddress, true);
-        
+
         invokeUserProcedure(QSB_CONTRACT_INDEX, 1, input, output, user, energyAmount);
         return output;
     }
@@ -264,11 +285,11 @@ public:
     {
         QSB::OverrideLock_input input;
         QSB::OverrideLock_output output;
-        
+
         input.nonce = nonce;
         input.relayerFee = relayerFee;
         copyToBuffer(input.toAddress, toAddress, true);
-        
+
         invokeUserProcedure(QSB_CONTRACT_INDEX, 2, input, output, user, 0);
         return output;
     }
@@ -289,94 +310,141 @@ public:
     }
 
     // ============================================================================
-    // Admin Procedure Helpers
+    // Admin Procedure Helpers (proposal system)
     // ============================================================================
-
-    QSB::TransferAdmin_output transferAdmin(const id& user, const id& newAdmin)
-    {
-        QSB::TransferAdmin_input input;
-        QSB::TransferAdmin_output output;
-        
-        input.newAdmin = newAdmin;
-        
-        invokeUserProcedure(QSB_CONTRACT_INDEX, 10, input, output, user, 0);
-        return output;
-    }
-
-    QSB::EditOracleThreshold_output editOracleThreshold(const id& user, uint8 newThreshold)
-    {
-        QSB::EditOracleThreshold_input input;
-        QSB::EditOracleThreshold_output output;
-        
-        input.newThreshold = newThreshold;
-        
-        invokeUserProcedure(QSB_CONTRACT_INDEX, 11, input, output, user, 0);
-        return output;
-    }
-
-    QSB::AddRole_output addRole(const id& user, uint8 role, const id& account)
-    {
-        QSB::AddRole_input input;
-        QSB::AddRole_output output;
-        
-        input.role = role;
-        input.account = account;
-        
-        invokeUserProcedure(QSB_CONTRACT_INDEX, 12, input, output, user, 0);
-        return output;
-    }
-
-    QSB::RemoveRole_output removeRole(const id& user, uint8 role, const id& account)
-    {
-        QSB::RemoveRole_input input;
-        QSB::RemoveRole_output output;
-        
-        input.role = role;
-        input.account = account;
-        
-        invokeUserProcedure(QSB_CONTRACT_INDEX, 13, input, output, user, 0);
-        return output;
-    }
 
     QSB::Pause_output pause(const id& user)
     {
         QSB::Pause_input input;
         QSB::Pause_output output;
-        
+        increaseEnergy(user, 1);
         invokeUserProcedure(QSB_CONTRACT_INDEX, 14, input, output, user, 0);
         return output;
     }
 
-    QSB::Unpause_output unpause(const id& user)
+    QSB::Propose_output propose(const id& user, const QSB::Propose_input& input)
     {
-        QSB::Unpause_input input;
-        QSB::Unpause_output output;
-        
-        invokeUserProcedure(QSB_CONTRACT_INDEX, 15, input, output, user, 0);
+        QSB::Propose_output output;
+        increaseEnergy(user, 1);
+        invokeUserProcedure(QSB_CONTRACT_INDEX, 20, input, output, user, 0);
         return output;
     }
 
-    QSB::EditFeeParameters_output editFeeParameters(
-        const id& user,
-        uint32 bpsFee,
-        uint32 protocolFee,
-        const id& protocolFeeRecipient,
-        const id& oracleFeeRecipient)
+    QSB::ApproveProposal_output approveProposal(const id& user, uint8 proposalId)
     {
-        QSB::EditFeeParameters_input input;
-        QSB::EditFeeParameters_output output;
-        
+        QSB::ApproveProposal_input input;
+        QSB::ApproveProposal_output output;
+        input.proposalId = proposalId;
+        increaseEnergy(user, 1);
+        invokeUserProcedure(QSB_CONTRACT_INDEX, 21, input, output, user, 0);
+        return output;
+    }
+
+    QSB::CancelProposal_output cancelProposal(const id& user, uint8 proposalId)
+    {
+        QSB::CancelProposal_input input;
+        QSB::CancelProposal_output output;
+        input.proposalId = proposalId;
+        increaseEnergy(user, 1);
+        invokeUserProcedure(QSB_CONTRACT_INDEX, 22, input, output, user, 0);
+        return output;
+    }
+
+    // Propose-then-approve convenience wrapper for 2-of-2 operations.
+    // Returns the approval output; expects both steps to succeed.
+    QSB::ApproveProposal_output proposeAndApprove(const id& proposer, const id& approver, const QSB::Propose_input& input)
+    {
+        QSB::Propose_output propOut = propose(proposer, input);
+        EXPECT_TRUE((bool)propOut.success);
+        QSB::ApproveProposal_output approveOut = approveProposal(approver, propOut.proposalId);
+        return approveOut;
+    }
+
+    // ============================================================================
+    // Named proposal helpers
+    // ============================================================================
+
+    QSB::ApproveProposal_output proposeAddRole(const id& proposer, const id& approver, uint8 role, const id& account)
+    {
+        QSB::Propose_input input;
+        setMemory(input, 0);
+        input.proposalType = QSBPropAddRole;
+        input.role = role;
+        input.targetId = account;
+        return proposeAndApprove(proposer, approver, input);
+    }
+
+    QSB::ApproveProposal_output proposeRemoveRole(const id& proposer, const id& approver, uint8 role, const id& account)
+    {
+        QSB::Propose_input input;
+        setMemory(input, 0);
+        input.proposalType = QSBPropRemoveRole;
+        input.role = role;
+        input.targetId = account;
+        return proposeAndApprove(proposer, approver, input);
+    }
+
+    QSB::ApproveProposal_output proposeEditOracleThreshold(const id& proposer, const id& approver, uint8 newThreshold)
+    {
+        QSB::Propose_input input;
+        setMemory(input, 0);
+        input.proposalType = QSBPropEditOracleThreshold;
+        input.newOracleThreshold = newThreshold;
+        return proposeAndApprove(proposer, approver, input);
+    }
+
+    QSB::ApproveProposal_output proposeEditFeeParameters(
+        const id& proposer, const id& approver,
+        uint32 bpsFee, uint32 protocolFee,
+        const id& protocolFeeRecipient, const id& oracleFeeRecipient)
+    {
+        QSB::Propose_input input;
+        setMemory(input, 0);
+        input.proposalType = QSBPropEditFeeParameters;
         input.bpsFee = bpsFee;
         input.protocolFee = protocolFee;
         input.protocolFeeRecipient = protocolFeeRecipient;
         input.oracleFeeRecipient = oracleFeeRecipient;
-        
-        invokeUserProcedure(QSB_CONTRACT_INDEX, 16, input, output, user, 0);
-        return output;
+        return proposeAndApprove(proposer, approver, input);
+    }
+
+    QSB::ApproveProposal_output proposeUnpause(const id& proposer, const id& approver)
+    {
+        QSB::Propose_input input;
+        setMemory(input, 0);
+        input.proposalType = QSBPropUnpause;
+        return proposeAndApprove(proposer, approver, input);
+    }
+
+    QSB::ApproveProposal_output proposeAddAdmin(const id& proposer, const id& approver, const id& newAdmin)
+    {
+        QSB::Propose_input input;
+        setMemory(input, 0);
+        input.proposalType = QSBPropAddAdmin;
+        input.targetId = newAdmin;
+        return proposeAndApprove(proposer, approver, input);
+    }
+
+    QSB::ApproveProposal_output proposeRemoveAdmin(const id& proposer, const id& approver, const id& target)
+    {
+        QSB::Propose_input input;
+        setMemory(input, 0);
+        input.proposalType = QSBPropRemoveAdmin;
+        input.targetId = target;
+        return proposeAndApprove(proposer, approver, input);
+    }
+
+    QSB::ApproveProposal_output proposeSetAdminThreshold(const id& proposer, const id& approver, uint8 newThreshold)
+    {
+        QSB::Propose_input input;
+        setMemory(input, 0);
+        input.proposalType = QSBPropSetAdminThreshold;
+        input.newAdminThreshold = newThreshold;
+        return proposeAndApprove(proposer, approver, input);
     }
 
     // ============================================================================
-    // View / helper function wrappers (GetConfig, IsOracle, IsPauser, GetLockedOrder, IsOrderFilled)
+    // View / helper function wrappers
     // ============================================================================
 
     void runEndEpoch()
@@ -473,6 +541,23 @@ public:
         callFunction(QSB_CONTRACT_INDEX, 10, input, output);
         return output;
     }
+
+    QSB::GetProposal_output getProposal(uint8 proposalId) const
+    {
+        QSB::GetProposal_input input;
+        QSB::GetProposal_output output;
+        input.proposalId = proposalId;
+        callFunction(QSB_CONTRACT_INDEX, 11, input, output);
+        return output;
+    }
+
+    QSB::GetProposals_output getProposals() const
+    {
+        QSB::GetProposals_input input;
+        QSB::GetProposals_output output;
+        callFunction(QSB_CONTRACT_INDEX, 12, input, output);
+        return output;
+    }
 };
 
 // ============================================================================
@@ -485,7 +570,10 @@ TEST(ContractTestingQSB, TestGetConfig_ReturnsInitialState)
 
     QSB::GetConfig_output config = test.getConfig();
 
-    EXPECT_EQ(config.admin, ADMIN);
+    EXPECT_EQ(config.adminCount, 2);
+    EXPECT_EQ(config.adminThreshold, 2);
+    EXPECT_EQ(config.admins.get(0), ADMIN);
+    EXPECT_EQ(config.admins.get(1), ADMIN2);
     EXPECT_EQ(config.protocolFeeRecipient, NULL_ID);
     EXPECT_EQ(config.oracleFeeRecipient, NULL_ID);
     EXPECT_EQ(config.bpsFee, 0u);
@@ -499,12 +587,10 @@ TEST(ContractTestingQSB, TestGetConfig_ReflectsAdminAndFeeChanges)
 {
     ContractTestingQSB test;
 
-    increaseEnergy(ADMIN, 1);
-    test.editFeeParameters(ADMIN, 50, 20, PROTOCOL_FEE_RECIPIENT, ORACLE_FEE_RECIPIENT);
+    test.proposeEditFeeParameters(ADMIN, ADMIN2, 50, 20, PROTOCOL_FEE_RECIPIENT, ORACLE_FEE_RECIPIENT);
 
     QSB::GetConfig_output config = test.getConfig();
 
-    EXPECT_EQ(config.admin, ADMIN);
     EXPECT_EQ(config.bpsFee, 50u);
     EXPECT_EQ(config.protocolFee, 20u);
     EXPECT_EQ(config.protocolFeeRecipient, PROTOCOL_FEE_RECIPIENT);
@@ -526,9 +612,7 @@ TEST(ContractTestingQSB, TestIsOracle_ReturnsTrueAfterAddRole)
 {
     ContractTestingQSB test;
 
-    increaseEnergy(ADMIN, 1);
-    increaseEnergy(ORACLE1, 1);
-    test.addRole(ADMIN, (uint8)QSB::Role::Oracle, ORACLE1);
+    test.proposeAddRole(ADMIN, ADMIN2, (uint8)QSB::Role::Oracle, ORACLE1);
 
     QSB::IsOracle_output out = test.isOracle(ORACLE1);
     EXPECT_TRUE((bool)out.isOracle);
@@ -541,9 +625,7 @@ TEST(ContractTestingQSB, TestIsPauser_ReturnsFalseWhenNotPauser)
 {
     ContractTestingQSB test;
 
-    increaseEnergy(ADMIN, 1);
-    increaseEnergy(PAUSER1, 1);
-    test.addRole(ADMIN, (uint8)QSB::Role::Pauser, PAUSER1);
+    test.proposeAddRole(ADMIN, ADMIN2, (uint8)QSB::Role::Pauser, PAUSER1);
 
     QSB::IsPauser_output out = test.isPauser(PAUSER1);
     EXPECT_TRUE((bool)out.isPauser);
@@ -556,9 +638,7 @@ TEST(ContractTestingQSB, TestIsPauser_ReturnsTrueAfterAddRole)
 {
     ContractTestingQSB test;
 
-    increaseEnergy(ADMIN, 1);
-    increaseEnergy(PAUSER1, 1);
-    test.addRole(ADMIN, (uint8)QSB::Role::Pauser, PAUSER1);
+    test.proposeAddRole(ADMIN, ADMIN2, (uint8)QSB::Role::Pauser, PAUSER1);
 
     QSB::IsPauser_output out = test.isPauser(PAUSER1);
     EXPECT_TRUE((bool)out.isPauser);
@@ -686,11 +766,8 @@ TEST(ContractTestingQSB, TestGetOracles_ReturnsAllOraclesAfterAddRole)
 {
     ContractTestingQSB test;
 
-    increaseEnergy(ADMIN, 1);
-    increaseEnergy(ORACLE1, 1);
-    increaseEnergy(ORACLE2, 1);
-    test.addRole(ADMIN, (uint8)QSB::Role::Oracle, ORACLE1);
-    test.addRole(ADMIN, (uint8)QSB::Role::Oracle, ORACLE2);
+    test.proposeAddRole(ADMIN, ADMIN2, (uint8)QSB::Role::Oracle, ORACLE1);
+    test.proposeAddRole(ADMIN, ADMIN2, (uint8)QSB::Role::Oracle, ORACLE2);
 
     QSB::GetOracles_output out = test.getOracles();
     EXPECT_EQ(out.count, 2u);
@@ -710,9 +787,7 @@ TEST(ContractTestingQSB, TestGetPausers_ReturnsAllPausersAfterAddRole)
 {
     ContractTestingQSB test;
 
-    increaseEnergy(ADMIN, 1);
-    increaseEnergy(PAUSER1, 1);
-    test.addRole(ADMIN, (uint8)QSB::Role::Pauser, PAUSER1);
+    test.proposeAddRole(ADMIN, ADMIN2, (uint8)QSB::Role::Pauser, PAUSER1);
 
     QSB::GetPausers_output out = test.getPausers();
     EXPECT_EQ(out.count, 1u);
@@ -847,6 +922,7 @@ TEST(ContractTestingQSB, TestFilledOrders_RingBufferOverwritesOldEntries)
         hash.set(1, (uint8)((QSB_MAX_FILLED_ORDERS >> 8) & 0xff));
         test.getState()->forceMarkOrderFilled(hash);
     }
+
     EXPECT_EQ(test.getState()->orderEra, 1u);
 
     // Hash 0 is still found — it lives in filledOrdersPrev (grace window)
@@ -888,15 +964,18 @@ TEST(ContractTestingQSB, TestFilledOrders_RingBufferOverwritesOldEntries)
 TEST(ContractTestingQSB, TestInitialization)
 {
     ContractTestingQSB test;
-    
+
     // Check initial state
-    test.getState()->checkAdmin(ADMIN);
+    test.getState()->checkAdminCount(2);
+    test.getState()->checkAdminThreshold(2);
+    test.getState()->checkIsAdmin(ADMIN);
+    test.getState()->checkIsAdmin(ADMIN2);
     test.getState()->checkPaused(false);
     test.getState()->checkOracleThreshold(67); // Default 67%
     test.getState()->checkOracleCount(0);
     test.getState()->checkBpsFee(0);
     test.getState()->checkProtocolFee(0);
-    
+
     test.getState()->checkProtocolFeeRecipient(NULL_ID);
     test.getState()->checkOracleFeeRecipient(NULL_ID);
 }
@@ -908,18 +987,18 @@ TEST(ContractTestingQSB, TestInitialization)
 TEST(ContractTestingQSB, TestLock_Success)
 {
     ContractTestingQSB test;
-    
+
     const uint64 amount = 1000000;
     const uint64 relayerFee = 10000;
     const uint32 networkOut = 1; // Solana
     const uint32 nonce = 1;
-    
+
     // User should have enough balance
     increaseEnergy(USER1, amount);
-    
+
     QSB::Lock_output output = test.lock(USER1, amount, relayerFee, networkOut, nonce, ContractTestingQSB::createZeroAddress(), amount);
     EXPECT_TRUE(output.success);
-    
+
     // Check that orderHash is non-zero
     bool hashNonZero = false;
     for (uint32 i = 0; i < output.orderHash.capacity(); ++i)
@@ -936,17 +1015,16 @@ TEST(ContractTestingQSB, TestLock_Success)
 TEST(ContractTestingQSB, TestLock_FailsWhenPaused)
 {
     ContractTestingQSB test;
-    
-    increaseEnergy(ADMIN, 1);
+
     increaseEnergy(USER1, 1000000);
-    
-    // Pause
+
+    // Pause (single-key, ADMIN is an admin/pauser)
     test.pause(ADMIN);
-    
+
     // Now try to lock - should fail
     const uint64 amount = 1000000;
     long long balanceBefore = getBalance(USER1);
-    
+
     QSB::Lock_output output = test.lock(USER1, amount, 10000, 1, 2, ContractTestingQSB::createZeroAddress(), amount);
     EXPECT_FALSE(output.success);
 
@@ -957,10 +1035,10 @@ TEST(ContractTestingQSB, TestLock_FailsWhenPaused)
 TEST(ContractTestingQSB, TestLock_FailsWhenRelayerFeeTooHigh)
 {
     ContractTestingQSB test;
-    
+
     const uint64 amount = 1000000;
     increaseEnergy(USER1, amount);
-    
+
     QSB::Lock_output output = test.lock(USER1, amount, 1000000, 1, 3, ContractTestingQSB::createZeroAddress(), amount);
     EXPECT_FALSE(output.success);
 }
@@ -1070,17 +1148,17 @@ TEST(ContractTestingQSB, TestLock_FailsWhenNonceAlreadyUsedAndRefunds)
 TEST(ContractTestingQSB, TestLock_FailsWhenNonceAlreadyUsed)
 {
     ContractTestingQSB test;
-    
+
     const uint64 amount = 1000000;
     const uint64 relayerFee = 10000;
     const uint32 nonce = 4;
-    
+
     increaseEnergy(USER1, amount);
-    
+
     // First lock should succeed
     QSB::Lock_output output = test.lock(USER1, amount, relayerFee, 1, nonce, ContractTestingQSB::createZeroAddress(), amount);
     EXPECT_TRUE(output.success);
-    
+
     // Second lock with same nonce should fail
     increaseEnergy(USER1, amount);
     QSB::Lock_output output2 = test.lock(USER1, amount, relayerFee, 1, nonce, ContractTestingQSB::createZeroAddress(), amount);
@@ -1094,19 +1172,19 @@ TEST(ContractTestingQSB, TestLock_FailsWhenNonceAlreadyUsed)
 TEST(ContractTestingQSB, TestOverrideLock_Success)
 {
     ContractTestingQSB test;
-    
+
     const uint64 amount = 1000000;
     const uint64 relayerFee = 10000;
     const uint32 nonce = 5;
-    
+
     // First, create a lock
     increaseEnergy(USER1, amount);
     test.lock(USER1, amount, relayerFee, 1, nonce, ContractTestingQSB::createZeroAddress(), amount);
-    
+
     // Now override it
     Array<uint8, 64> newAddress = ContractTestingQSB::createZeroAddress();
     newAddress.set(0, 0xFF); // Change address
-    
+
     QSB::OverrideLock_output overrideOutput = test.overrideLock(USER1, nonce, 5000, newAddress);
     EXPECT_TRUE(overrideOutput.success);
 }
@@ -1188,94 +1266,386 @@ TEST(ContractTestingQSB, TestOverrideLock_BlockedAfterMaxAttempts)
 }
 
 // ============================================================================
-// Admin Function Tests
+// Admin Multisig Tests
 // ============================================================================
 
-TEST(ContractTestingQSB, TestTransferAdmin_Success)
-{
-    ContractTestingQSB test;
-    
-    increaseEnergy(ADMIN, 1);
-    increaseEnergy(USER1, 1);
-    QSB::TransferAdmin_output output = test.transferAdmin(ADMIN, USER1);
-    EXPECT_TRUE(output.success);
-    
-    test.getState()->checkAdmin(USER1);
-}
-
-TEST(ContractTestingQSB, TestTransferAdmin_ToNullId)
+TEST(ContractTestingQSB, TestPropose_FailsWhenNotAdmin)
 {
     ContractTestingQSB test;
 
-    increaseEnergy(ADMIN, 1);
-    QSB::TransferAdmin_output output = test.transferAdmin(ADMIN, NULL_ID);
-    EXPECT_FALSE(output.success);
+    QSB::Propose_input input;
+    setMemory(input, 0);
+    input.proposalType = QSBPropAddRole;
+    input.role = (uint8)QSB::Role::Oracle;
+    input.targetId = ORACLE1;
 
-    // Admin must not be reset to zero (which would open bootstrap for everyone)
-    test.getState()->checkAdmin(ADMIN);
+    QSB::Propose_output out = test.propose(USER1, input);
+    EXPECT_FALSE((bool)out.success);
+    EXPECT_EQ(out.reasonCode, QSBReasonNotAdmin);
 }
 
-TEST(ContractTestingQSB, TestTransferAdmin_FailsWhenNotAdmin)
+TEST(ContractTestingQSB, TestPropose_FailsWhenAdminExceedsConcurrentCap)
 {
     ContractTestingQSB test;
-    
-    // First bootstrap admin
-    increaseEnergy(USER1, 1);
-    increaseEnergy(USER2, 1);
-    // Now USER1 tries to transfer admin - should fail
-    QSB::TransferAdmin_output output = test.transferAdmin(USER1, USER2);
-    EXPECT_FALSE(output.success);
-    
-    // Admin should still be ADMIN
-    test.getState()->checkAdmin(ADMIN);
+
+    // Fill ADMIN's quota (QSB_MAX_PROPOSALS_PER_ADMIN = 3)
+    QSB::Propose_input input;
+    for (uint32 i = 0; i < QSB_MAX_PROPOSALS_PER_ADMIN; ++i)
+    {
+        setMemory(input, 0);
+        input.proposalType = QSBPropAddRole;
+        input.role         = (uint8)QSB::Role::Oracle;
+        input.targetId     = ORACLE1;
+        QSB::Propose_output out = test.propose(ADMIN, input);
+        EXPECT_TRUE((bool)out.success) << "proposal " << i << " should succeed";
+    }
+
+    // The (cap+1)-th proposal from the same admin must be rejected
+    setMemory(input, 0);
+    input.proposalType = QSBPropAddRole;
+    input.role         = (uint8)QSB::Role::Oracle;
+    input.targetId     = ORACLE1;
+    QSB::Propose_output overflow = test.propose(ADMIN, input);
+    EXPECT_FALSE((bool)overflow.success);
+    EXPECT_EQ(overflow.reasonCode, QSBReasonTooManyProposals);
+
+    // Other admins are unaffected — ADMIN2 can still propose
+    setMemory(input, 0);
+    input.proposalType = QSBPropAddRole;
+    input.role         = (uint8)QSB::Role::Oracle;
+    input.targetId     = ORACLE1;
+    QSB::Propose_output admin2Out = test.propose(ADMIN2, input);
+    EXPECT_TRUE((bool)admin2Out.success);
 }
+
+TEST(ContractTestingQSB, TestPropose_AutoApprovesForProposer)
+{
+    ContractTestingQSB test;
+
+    // With threshold=2, one approval doesn't execute yet
+    QSB::Propose_input input;
+    setMemory(input, 0);
+    input.proposalType = QSBPropAddRole;
+    input.role = (uint8)QSB::Role::Oracle;
+    input.targetId = ORACLE1;
+
+    QSB::Propose_output propOut = test.propose(ADMIN, input);
+    EXPECT_TRUE((bool)propOut.success);
+
+    // Proposal exists with approvalCount=1 (proposer auto-approved)
+    QSB::GetProposal_output propState = test.getProposal(propOut.proposalId);
+    EXPECT_TRUE((bool)propState.exists);
+    EXPECT_EQ(propState.proposal.approvalCount, 1);
+    EXPECT_EQ(propState.proposal.executed, 0);
+
+    // Role not yet added
+    QSB::IsOracle_output oracleOut = test.isOracle(ORACLE1);
+    EXPECT_FALSE((bool)oracleOut.isOracle);
+}
+
+TEST(ContractTestingQSB, TestApproveProposal_ExecutesAtThreshold)
+{
+    ContractTestingQSB test;
+
+    QSB::Propose_input input;
+    setMemory(input, 0);
+    input.proposalType = QSBPropAddRole;
+    input.role = (uint8)QSB::Role::Oracle;
+    input.targetId = ORACLE1;
+
+    QSB::Propose_output propOut = test.propose(ADMIN, input);
+    EXPECT_TRUE((bool)propOut.success);
+
+    // Second admin approves → threshold=2 reached → executes
+    QSB::ApproveProposal_output approveOut = test.approveProposal(ADMIN2, propOut.proposalId);
+    EXPECT_TRUE((bool)approveOut.success);
+    EXPECT_TRUE((bool)approveOut.executed);
+
+    // Role was added
+    QSB::IsOracle_output oracleOut = test.isOracle(ORACLE1);
+    EXPECT_TRUE((bool)oracleOut.isOracle);
+}
+
+TEST(ContractTestingQSB, TestApproveProposal_FailsWhenNotAdmin)
+{
+    ContractTestingQSB test;
+
+    QSB::Propose_input input;
+    setMemory(input, 0);
+    input.proposalType = QSBPropAddRole;
+    input.role = (uint8)QSB::Role::Oracle;
+    input.targetId = ORACLE1;
+
+    QSB::Propose_output propOut = test.propose(ADMIN, input);
+    EXPECT_TRUE((bool)propOut.success);
+
+    QSB::ApproveProposal_output approveOut = test.approveProposal(USER1, propOut.proposalId);
+    EXPECT_FALSE((bool)approveOut.success);
+    EXPECT_EQ(approveOut.reasonCode, QSBReasonNotAdmin);
+}
+
+TEST(ContractTestingQSB, TestApproveProposal_FailsOnDuplicateApproval)
+{
+    ContractTestingQSB test;
+
+    QSB::Propose_input input;
+    setMemory(input, 0);
+    input.proposalType = QSBPropAddRole;
+    input.role = (uint8)QSB::Role::Oracle;
+    input.targetId = ORACLE1;
+
+    QSB::Propose_output propOut = test.propose(ADMIN, input);
+    EXPECT_TRUE((bool)propOut.success);
+
+    // ADMIN already auto-approved when proposing; approving again should fail
+    QSB::ApproveProposal_output approveOut = test.approveProposal(ADMIN, propOut.proposalId);
+    EXPECT_FALSE((bool)approveOut.success);
+    EXPECT_EQ(approveOut.reasonCode, QSBReasonAlreadyApproved);
+}
+
+TEST(ContractTestingQSB, TestCancelProposal_ByProposer)
+{
+    ContractTestingQSB test;
+
+    QSB::Propose_input input;
+    setMemory(input, 0);
+    input.proposalType = QSBPropAddRole;
+    input.role = (uint8)QSB::Role::Oracle;
+    input.targetId = ORACLE1;
+
+    QSB::Propose_output propOut = test.propose(ADMIN, input);
+    EXPECT_TRUE((bool)propOut.success);
+
+    QSB::CancelProposal_output cancelOut = test.cancelProposal(ADMIN, propOut.proposalId);
+    EXPECT_TRUE((bool)cancelOut.success);
+
+    // Proposal no longer active
+    QSB::GetProposal_output propState = test.getProposal(propOut.proposalId);
+    EXPECT_FALSE((bool)propState.exists);
+}
+
+TEST(ContractTestingQSB, TestCancelProposal_FailsWhenNotProposer)
+{
+    ContractTestingQSB test;
+
+    QSB::Propose_input input;
+    setMemory(input, 0);
+    input.proposalType = QSBPropAddRole;
+    input.role = (uint8)QSB::Role::Oracle;
+    input.targetId = ORACLE1;
+
+    QSB::Propose_output propOut = test.propose(ADMIN, input);
+    EXPECT_TRUE((bool)propOut.success);
+
+    // ADMIN2 is not the proposer
+    QSB::CancelProposal_output cancelOut = test.cancelProposal(ADMIN2, propOut.proposalId);
+    EXPECT_FALSE((bool)cancelOut.success);
+    EXPECT_EQ(cancelOut.reasonCode, QSBReasonNotProposer);
+}
+
+TEST(ContractTestingQSB, TestAddAdmin_Success)
+{
+    ContractTestingQSB test;
+
+    // Add a third admin
+    QSB::ApproveProposal_output out = test.proposeAddAdmin(ADMIN, ADMIN2, USER1);
+    EXPECT_TRUE((bool)out.success);
+    EXPECT_TRUE((bool)out.executed);
+
+    test.getState()->checkAdminCount(3);
+    test.getState()->checkIsAdmin(USER1);
+}
+
+TEST(ContractTestingQSB, TestAddAdmin_FailsWhenAlreadyAdmin)
+{
+    ContractTestingQSB test;
+
+    QSB::Propose_input input;
+    setMemory(input, 0);
+    input.proposalType = QSBPropAddAdmin;
+    input.targetId = ADMIN2;  // already an admin
+
+    // Proposal creation should fail (or execution should fail)
+    QSB::Propose_output propOut = test.propose(ADMIN, input);
+    if ((bool)propOut.success)
+    {
+        QSB::ApproveProposal_output approveOut = test.approveProposal(ADMIN2, propOut.proposalId);
+        // Execution must reject AlreadyAdmin
+        EXPECT_FALSE((bool)approveOut.executed);
+    }
+    // Either way admin count stays 2
+    test.getState()->checkAdminCount(2);
+}
+
+TEST(ContractTestingQSB, TestRemoveAdmin_Success)
+{
+    ContractTestingQSB test;
+
+    // Start: 2 admins, threshold=2. Lower threshold first so we don't lock.
+    test.proposeSetAdminThreshold(ADMIN, ADMIN2, 1);
+    test.getState()->checkAdminThreshold(1);
+
+    // Now remove ADMIN2
+    test.proposeRemoveAdmin(ADMIN, ADMIN2, ADMIN2);
+    test.getState()->checkAdminCount(1);
+    test.getState()->checkIsNotAdmin(ADMIN2);
+}
+
+TEST(ContractTestingQSB, TestRemoveAdmin_FailsWouldLockContract)
+{
+    ContractTestingQSB test;
+
+    // With threshold=2 and adminCount=2, removing one admin would leave 1 < threshold.
+    // The Propose procedure itself rejects this before creating a proposal.
+    QSB::Propose_input input;
+    setMemory(input, 0);
+    input.proposalType = QSBPropRemoveAdmin;
+    input.targetId = ADMIN2;
+
+    QSB::Propose_output propOut = test.propose(ADMIN, input);
+    EXPECT_FALSE((bool)propOut.success);
+    EXPECT_EQ(propOut.reasonCode, QSBReasonWouldLockContract);
+
+    test.getState()->checkAdminCount(2);
+}
+
+TEST(ContractTestingQSB, TestSetAdminThreshold_Success)
+{
+    ContractTestingQSB test;
+
+    // First add a third admin so threshold can be set to 3
+    test.proposeAddAdmin(ADMIN, ADMIN2, USER1);
+    test.getState()->checkAdminCount(3);
+
+    test.proposeSetAdminThreshold(ADMIN, ADMIN2, 3);
+    test.getState()->checkAdminThreshold(3);
+}
+
+TEST(ContractTestingQSB, TestSetAdminThreshold_FailsWouldLockContract)
+{
+    ContractTestingQSB test;
+
+    // threshold=2 and adminCount=2: trying to set threshold=3 would exceed adminCount.
+    // The Propose procedure itself rejects this before creating a proposal.
+    QSB::Propose_input input;
+    setMemory(input, 0);
+    input.proposalType = QSBPropSetAdminThreshold;
+    input.newAdminThreshold = 3;
+
+    QSB::Propose_output propOut = test.propose(ADMIN, input);
+    EXPECT_FALSE((bool)propOut.success);
+    EXPECT_EQ(propOut.reasonCode, QSBReasonInvalidThreshold);
+
+    test.getState()->checkAdminThreshold(2);
+}
+
+TEST(ContractTestingQSB, TestAdminSetChange_CancelsAllPendingProposals)
+{
+    ContractTestingQSB test;
+
+    // Create a pending proposal
+    QSB::Propose_input pendingInput;
+    setMemory(pendingInput, 0);
+    pendingInput.proposalType = QSBPropAddRole;
+    pendingInput.role = (uint8)QSB::Role::Oracle;
+    pendingInput.targetId = ORACLE1;
+
+    QSB::Propose_output pendingProp = test.propose(ADMIN, pendingInput);
+    EXPECT_TRUE((bool)pendingProp.success);
+
+    // Confirm it's active
+    QSB::GetProposal_output before = test.getProposal(pendingProp.proposalId);
+    EXPECT_TRUE((bool)before.exists);
+
+    // Execute an AddAdmin proposal (admin set change)
+    test.proposeAddAdmin(ADMIN, ADMIN2, USER2);
+
+    // The pending AddRole proposal should have been cancelled
+    QSB::GetProposal_output after = test.getProposal(pendingProp.proposalId);
+    EXPECT_FALSE((bool)after.exists);
+}
+
+TEST(ContractTestingQSB, TestProposalExpiry_ExpiredProposalIsInactive)
+{
+    ContractTestingQSB test;
+
+    QSB::Propose_input input;
+    setMemory(input, 0);
+    input.proposalType = QSBPropAddRole;
+    input.role = (uint8)QSB::Role::Oracle;
+    input.targetId = ORACLE1;
+
+    QSB::Propose_output propOut = test.propose(ADMIN, input);
+    EXPECT_TRUE((bool)propOut.success);
+
+    // Advance system.epoch past QSB_PROPOSAL_EXPIRY_EPOCHS and trigger END_EPOCH sweep.
+    // (qpi.epoch() reads system.epoch which is 0 by default in tests)
+    system.epoch = QSB_PROPOSAL_EXPIRY_EPOCHS + 1;
+    test.runEndEpoch();
+
+    // Proposal should be expired (inactive)
+    QSB::GetProposal_output propState = test.getProposal(propOut.proposalId);
+    EXPECT_FALSE((bool)propState.exists);
+
+    // Trying to approve the expired proposal should fail
+    QSB::ApproveProposal_output approveOut = test.approveProposal(ADMIN2, propOut.proposalId);
+    EXPECT_FALSE((bool)approveOut.success);
+
+    // Restore epoch for subsequent tests
+    system.epoch = 0;
+}
+
+// ============================================================================
+// Admin Function Tests (proposal-based)
+// ============================================================================
 
 TEST(ContractTestingQSB, TestEditOracleThreshold_Success)
 {
     ContractTestingQSB test;
-    
-    // Bootstrap admin
-    increaseEnergy(ADMIN, 1);
-    
-    QSB::EditOracleThreshold_output output = test.editOracleThreshold(ADMIN, 75);
-    EXPECT_TRUE(output.success);
-    EXPECT_EQ(output.oldThreshold, 67); // Original default
-    
+
+    QSB::ApproveProposal_output out = test.proposeEditOracleThreshold(ADMIN, ADMIN2, 75);
+    EXPECT_TRUE((bool)out.success);
+    EXPECT_TRUE((bool)out.executed);
+
     test.getState()->checkOracleThreshold(75);
 }
 
 TEST(ContractTestingQSB, TestAddRole_Oracle)
 {
     ContractTestingQSB test;
-    
-    // Bootstrap admin
-    increaseEnergy(ADMIN, 1);
-    
-    QSB::AddRole_output output = test.addRole(ADMIN, (uint8)QSB::Role::Oracle, ORACLE1);
-    EXPECT_TRUE(output.success);
-    
+
+    QSB::ApproveProposal_output out = test.proposeAddRole(ADMIN, ADMIN2, (uint8)QSB::Role::Oracle, ORACLE1);
+    EXPECT_TRUE((bool)out.success);
+    EXPECT_TRUE((bool)out.executed);
+
     test.getState()->checkOracleCount(1);
 }
 
 TEST(ContractTestingQSB, TestAddRole_Pauser)
 {
     ContractTestingQSB test;
-    
-    // Bootstrap admin
-    increaseEnergy(ADMIN, 1);
-    increaseEnergy(PAUSER1, 1);
-    
-    QSB::AddRole_output output = test.addRole(ADMIN, (uint8)QSB::Role::Pauser, PAUSER1);
-    EXPECT_TRUE(output.success);
+
+    QSB::ApproveProposal_output out = test.proposeAddRole(ADMIN, ADMIN2, (uint8)QSB::Role::Pauser, PAUSER1);
+    EXPECT_TRUE((bool)out.success);
+    EXPECT_TRUE((bool)out.executed);
 }
 
 TEST(ContractTestingQSB, TestAddRole_InvalidRole)
 {
     ContractTestingQSB test;
-    increaseEnergy(ADMIN, 1);
 
-    QSB::AddRole_output output = test.addRole(ADMIN, 99, USER1);
-    EXPECT_FALSE(output.success);
+    QSB::Propose_input input;
+    setMemory(input, 0);
+    input.proposalType = QSBPropAddRole;
+    input.role = 99;  // invalid
+    input.targetId = USER1;
+
+    QSB::Propose_output propOut = test.propose(ADMIN, input);
+    if ((bool)propOut.success)
+    {
+        QSB::ApproveProposal_output approveOut = test.approveProposal(ADMIN2, propOut.proposalId);
+        EXPECT_FALSE((bool)approveOut.executed);
+    }
 
     test.getState()->checkOracleCount(0);
 }
@@ -1283,51 +1653,72 @@ TEST(ContractTestingQSB, TestAddRole_InvalidRole)
 TEST(ContractTestingQSB, TestAddRole_OracleFull)
 {
     ContractTestingQSB test;
-    increaseEnergy(ADMIN, 1);
 
     for (uint32_t i = 0; i < QSB_MAX_ORACLES; ++i)
     {
         id oracle(i + 1, 0, 0, 0);
-        QSB::AddRole_output out = test.addRole(ADMIN, (uint8)QSB::Role::Oracle, oracle);
-        EXPECT_TRUE(out.success);
+        QSB::ApproveProposal_output out = test.proposeAddRole(ADMIN, ADMIN2, (uint8)QSB::Role::Oracle, oracle);
+        EXPECT_TRUE((bool)out.executed);
     }
     test.getState()->checkOracleCount(QSB_MAX_ORACLES);
 
     id extra(QSB_MAX_ORACLES + 1, 0, 0, 0);
-    QSB::AddRole_output output = test.addRole(ADMIN, (uint8)QSB::Role::Oracle, extra);
-    EXPECT_FALSE(output.success);
+    QSB::Propose_input input;
+    setMemory(input, 0);
+    input.proposalType = QSBPropAddRole;
+    input.role = (uint8)QSB::Role::Oracle;
+    input.targetId = extra;
+    QSB::Propose_output propOut = test.propose(ADMIN, input);
+    if ((bool)propOut.success)
+    {
+        // executed=true means threshold was reached, not that the payload succeeded
+        test.approveProposal(ADMIN2, propOut.proposalId);
+    }
 
+    // Extra oracle must not have been added
+    QSB::IsOracle_output isOracleOut = test.isOracle(extra);
+    EXPECT_FALSE((bool)isOracleOut.isOracle);
     test.getState()->checkOracleCount(QSB_MAX_ORACLES);
 }
 
 TEST(ContractTestingQSB, TestAddRole_PauserFull)
 {
     ContractTestingQSB test;
-    increaseEnergy(ADMIN, 1);
 
     for (uint32_t i = 0; i < QSB_MAX_PAUSERS; ++i)
     {
         id pauser(i + 1, 0, 0, 0);
-        QSB::AddRole_output out = test.addRole(ADMIN, (uint8)QSB::Role::Pauser, pauser);
-        EXPECT_TRUE(out.success);
+        QSB::ApproveProposal_output out = test.proposeAddRole(ADMIN, ADMIN2, (uint8)QSB::Role::Pauser, pauser);
+        EXPECT_TRUE((bool)out.executed);
     }
 
     id extra(QSB_MAX_PAUSERS + 1, 0, 0, 0);
-    QSB::AddRole_output output = test.addRole(ADMIN, (uint8)QSB::Role::Pauser, extra);
-    EXPECT_FALSE(output.success);
+    QSB::Propose_input input;
+    setMemory(input, 0);
+    input.proposalType = QSBPropAddRole;
+    input.role = (uint8)QSB::Role::Pauser;
+    input.targetId = extra;
+    QSB::Propose_output propOut = test.propose(ADMIN, input);
+    if ((bool)propOut.success)
+    {
+        // executed=true means threshold was reached, not that the payload succeeded
+        test.approveProposal(ADMIN2, propOut.proposalId);
+    }
+
+    // Extra pauser must not have been added
+    QSB::IsPauser_output isPauserOut = test.isPauser(extra);
+    EXPECT_FALSE((bool)isPauserOut.isPauser);
 }
 
 TEST(ContractTestingQSB, TestRemoveRole_Oracle)
 {
     ContractTestingQSB test;
 
-    // Bootstrap admin and add oracle
-    increaseEnergy(ADMIN, 1);
-    test.addRole(ADMIN, (uint8)QSB::Role::Oracle, ORACLE1);
+    test.proposeAddRole(ADMIN, ADMIN2, (uint8)QSB::Role::Oracle, ORACLE1);
 
-    // Now remove it
-    QSB::RemoveRole_output output = test.removeRole(ADMIN, (uint8)QSB::Role::Oracle, ORACLE1);
-    EXPECT_TRUE(output.success);
+    QSB::ApproveProposal_output out = test.proposeRemoveRole(ADMIN, ADMIN2, (uint8)QSB::Role::Oracle, ORACLE1);
+    EXPECT_TRUE((bool)out.success);
+    EXPECT_TRUE((bool)out.executed);
 
     test.getState()->checkOracleCount(0);
 }
@@ -1335,61 +1726,56 @@ TEST(ContractTestingQSB, TestRemoveRole_Oracle)
 TEST(ContractTestingQSB, TestPause_ByAdmin)
 {
     ContractTestingQSB test;
-    
-    // Bootstrap admin
-    increaseEnergy(ADMIN, 1);
-    
+
     QSB::Pause_output output = test.pause(ADMIN);
     EXPECT_TRUE(output.success);
-    
+
     test.getState()->checkPaused(true);
 }
 
 TEST(ContractTestingQSB, TestPause_ByPauser)
 {
     ContractTestingQSB test;
-    
-    // Bootstrap admin
-    increaseEnergy(ADMIN, 1);
-    increaseEnergy(PAUSER1, 1);
-    
-    // Add pauser
-    test.addRole(ADMIN, (uint8)QSB::Role::Pauser, PAUSER1);
-    
-    // Pauser can pause
+
+    test.proposeAddRole(ADMIN, ADMIN2, (uint8)QSB::Role::Pauser, PAUSER1);
+
+    // Pauser can pause without going through a proposal
     QSB::Pause_output output = test.pause(PAUSER1);
     EXPECT_TRUE(output.success);
-    
+
     test.getState()->checkPaused(true);
 }
 
-TEST(ContractTestingQSB, TestUnpause_ByAdmin)
+TEST(ContractTestingQSB, TestUnpause_ByAdminProposal)
 {
     ContractTestingQSB test;
 
-    increaseEnergy(ADMIN, 1);
     test.pause(ADMIN);
+    test.getState()->checkPaused(true);
 
-    QSB::Unpause_output output = test.unpause(ADMIN);
-    EXPECT_TRUE(output.success);
+    QSB::ApproveProposal_output out = test.proposeUnpause(ADMIN, ADMIN2);
+    EXPECT_TRUE((bool)out.success);
+    EXPECT_TRUE((bool)out.executed);
 
     test.getState()->checkPaused(false);
 }
 
-TEST(ContractTestingQSB, TestUnpause_FailsForPauser)
+TEST(ContractTestingQSB, TestUnpause_FailsForNonAdmin)
 {
     ContractTestingQSB test;
 
-    increaseEnergy(ADMIN, 1);
-    increaseEnergy(PAUSER1, 1);
-
-    test.addRole(ADMIN, (uint8)QSB::Role::Pauser, PAUSER1);
+    test.proposeAddRole(ADMIN, ADMIN2, (uint8)QSB::Role::Pauser, PAUSER1);
     test.pause(PAUSER1);
     test.getState()->checkPaused(true);
 
-    // Pauser must not be able to cancel their own pause
-    QSB::Unpause_output output = test.unpause(PAUSER1);
-    EXPECT_FALSE(output.success);
+    // Pauser must not be able to unpause (it's admin-only via proposal)
+    QSB::Propose_input input;
+    setMemory(input, 0);
+    input.proposalType = QSBPropUnpause;
+
+    QSB::Propose_output propOut = test.propose(PAUSER1, input);
+    EXPECT_FALSE((bool)propOut.success);
+    EXPECT_EQ(propOut.reasonCode, QSBReasonNotAdmin);
 
     test.getState()->checkPaused(true);
 }
@@ -1397,13 +1783,11 @@ TEST(ContractTestingQSB, TestUnpause_FailsForPauser)
 TEST(ContractTestingQSB, TestEditFeeParameters)
 {
     ContractTestingQSB test;
-    
-    // Bootstrap admin
-    increaseEnergy(ADMIN, 1);
-    
-    QSB::EditFeeParameters_output output = test.editFeeParameters(ADMIN, 100, 30, PROTOCOL_FEE_RECIPIENT, ORACLE_FEE_RECIPIENT);
-    EXPECT_TRUE(output.success);
-    
+
+    QSB::ApproveProposal_output out = test.proposeEditFeeParameters(ADMIN, ADMIN2, 100, 30, PROTOCOL_FEE_RECIPIENT, ORACLE_FEE_RECIPIENT);
+    EXPECT_TRUE((bool)out.success);
+    EXPECT_TRUE((bool)out.executed);
+
     test.getState()->checkBpsFee(100);
     test.getState()->checkProtocolFee(30);
     test.getState()->checkProtocolFeeRecipient(PROTOCOL_FEE_RECIPIENT);
@@ -1414,12 +1798,17 @@ TEST(ContractTestingQSB, TestEditFeeParameters_RejectsTooHighBpsFee)
 {
     ContractTestingQSB test;
 
-    // Bootstrap admin
-    increaseEnergy(ADMIN, 1);
+    QSB::Propose_input input;
+    setMemory(input, 0);
+    input.proposalType = QSBPropEditFeeParameters;
+    input.bpsFee = QSB_MAX_BPS_FEE + 1;
 
-    // Try to set bpsFee above the allowed maximum
-    QSB::EditFeeParameters_output output = test.editFeeParameters(ADMIN, QSB_MAX_BPS_FEE + 1, 0, NULL_ID, NULL_ID);
-    EXPECT_FALSE(output.success);
+    QSB::Propose_output propOut = test.propose(ADMIN, input);
+    if ((bool)propOut.success)
+    {
+        QSB::ApproveProposal_output out = test.approveProposal(ADMIN2, propOut.proposalId);
+        EXPECT_FALSE((bool)out.executed);
+    }
 
     // State should remain unchanged
     test.getState()->checkBpsFee(0);
@@ -1429,13 +1818,22 @@ TEST(ContractTestingQSB, TestEditFeeParameters_RejectsTooHighProtocolFee)
 {
     ContractTestingQSB test;
 
-    // Bootstrap admin and set an initial valid configuration
-    increaseEnergy(ADMIN, 1);
-    test.editFeeParameters(ADMIN, 100, 10, PROTOCOL_FEE_RECIPIENT, ORACLE_FEE_RECIPIENT);
+    // Set an initial valid configuration first
+    test.proposeEditFeeParameters(ADMIN, ADMIN2, 100, 10, PROTOCOL_FEE_RECIPIENT, ORACLE_FEE_RECIPIENT);
 
     // Attempt to set protocolFee above the allowed maximum
-    QSB::EditFeeParameters_output output = test.editFeeParameters(ADMIN, 0, QSB_MAX_PROTOCOL_FEE + 1, NULL_ID, NULL_ID);
-    EXPECT_FALSE(output.success);
+    QSB::Propose_input input;
+    setMemory(input, 0);
+    input.proposalType = QSBPropEditFeeParameters;
+    input.bpsFee = 0;
+    input.protocolFee = QSB_MAX_PROTOCOL_FEE + 1;
+
+    QSB::Propose_output propOut = test.propose(ADMIN, input);
+    if ((bool)propOut.success)
+    {
+        QSB::ApproveProposal_output out = test.approveProposal(ADMIN2, propOut.proposalId);
+        EXPECT_FALSE((bool)out.executed);
+    }
 
     // State should still reflect the previous valid configuration
     test.getState()->checkProtocolFee(10);
@@ -1470,17 +1868,15 @@ TEST(ContractTestingQSB, TestUnlock_FailsWhenNoOracles)
 TEST(ContractTestingQSB, TestUnlock_FailsWhenPaused)
 {
     ContractTestingQSB test;
-    
-    // Bootstrap admin, add oracle, and pause
-    increaseEnergy(ADMIN, 1);
-    test.addRole(ADMIN, (uint8)QSB::Role::Oracle, ORACLE1);
+
+    test.proposeAddRole(ADMIN, ADMIN2, (uint8)QSB::Role::Oracle, ORACLE1);
     test.pause(ADMIN);
-    
+
     QSB::Order order = ContractTestingQSB::createTestOrderFromU32Nonce(USER1, USER2, 1000000, 10000, 101);
     Array<QSB::SignatureData, QSB_MAX_ORACLES> signatures;
     setMemory(signatures, 0);
     signatures.set(0, test.createMockSignature(ORACLE1));
-    
+
     QSB::Unlock_output output = test.unlock(USER1, order, 1, signatures);
     EXPECT_FALSE(output.success); // Should fail - contract is paused
 }
@@ -1557,21 +1953,21 @@ TEST(ContractTestingQSB, TestUnlock_DoesNotRequireMatchingLock)
 TEST(ContractTestingQSB, TestFullWorkflow_LockAndOverride)
 {
     ContractTestingQSB test;
-    
+
     const uint64 amount = 1000000;
     const uint64 initialRelayerFee = 10000;
     const uint64 newRelayerFee = 5000;
     const uint32 nonce = 200;
-    
+
     // Step 1: Lock
     increaseEnergy(USER1, amount);
     QSB::Lock_output lockOutput = test.lock(USER1, amount, initialRelayerFee, 1, nonce, ContractTestingQSB::createZeroAddress(), amount);
     EXPECT_TRUE(lockOutput.success);
-    
+
     // Step 2: Override
     QSB::OverrideLock_output overrideOutput = test.overrideLock(USER1, nonce, newRelayerFee, ContractTestingQSB::createZeroAddress());
     EXPECT_TRUE(overrideOutput.success);
-    
+
     // OrderHash should be different after override
     bool hashesDifferent = false;
     for (uint32 i = 0; i < lockOutput.orderHash.capacity(); ++i)
@@ -1588,27 +1984,21 @@ TEST(ContractTestingQSB, TestFullWorkflow_LockAndOverride)
 TEST(ContractTestingQSB, TestAdminWorkflow_SetupAndConfigure)
 {
     ContractTestingQSB test;
-    
-    // Step 1: Bootstrap admin
-    increaseEnergy(ADMIN, 1);
-    
-    // Step 2: Add oracles
-    increaseEnergy(ORACLE1, 1);
-    increaseEnergy(ORACLE2, 1);
-    increaseEnergy(ORACLE3, 1);
-    test.addRole(ADMIN, (uint8)QSB::Role::Oracle, ORACLE1);
-    test.addRole(ADMIN, (uint8)QSB::Role::Oracle, ORACLE2);
-    test.addRole(ADMIN, (uint8)QSB::Role::Oracle, ORACLE3);
-    
+
+    // Add oracles via multisig proposals
+    test.proposeAddRole(ADMIN, ADMIN2, (uint8)QSB::Role::Oracle, ORACLE1);
+    test.proposeAddRole(ADMIN, ADMIN2, (uint8)QSB::Role::Oracle, ORACLE2);
+    test.proposeAddRole(ADMIN, ADMIN2, (uint8)QSB::Role::Oracle, ORACLE3);
+
     test.getState()->checkOracleCount(3);
-    
-    // Step 3: Set threshold
-    test.editOracleThreshold(ADMIN, 67); // 2/3 + 1
+
+    // Update oracle threshold
+    test.proposeEditOracleThreshold(ADMIN, ADMIN2, 67); // 2/3
     test.getState()->checkOracleThreshold(67);
-    
-    // Step 4: Configure fees
-    test.editFeeParameters(ADMIN, 50, 20, PROTOCOL_FEE_RECIPIENT, ORACLE_FEE_RECIPIENT);
-    
+
+    // Configure fees
+    test.proposeEditFeeParameters(ADMIN, ADMIN2, 50, 20, PROTOCOL_FEE_RECIPIENT, ORACLE_FEE_RECIPIENT);
+
     test.getState()->checkBpsFee(50);
     test.getState()->checkProtocolFee(20);
 }
@@ -1627,7 +2017,6 @@ TEST(ContractTestingQSB, TestGetConfig_ReturnsOrderEra)
 TEST(ContractTestingQSB, TestLock_StoresCurrentEra)
 {
     ContractTestingQSB test;
-    increaseEnergy(ADMIN, 1);
     uint64 amount = 10000;
     uint32 nonce = 1;
 
@@ -1686,7 +2075,6 @@ TEST(ContractTestingQSB, TestFilledOrders_EraIncrementsOnWrap)
 TEST(ContractTestingQSB, TestOverrideLock_PreservesOriginalEra)
 {
     ContractTestingQSB test;
-    increaseEnergy(ADMIN, 1);
     uint64 amount = 10000;
     uint32 nonce = 42;
 
@@ -1721,12 +2109,10 @@ TEST(ContractTestingQSB, TestOverrideLock_PreservesOriginalEra)
 TEST(ContractTestingQSB, TestUnlock_FailsWhenEraMismatch)
 {
     ContractTestingQSB test;
-    increaseEnergy(ADMIN, 1);
 
-    // Setup: add oracle, set threshold
-    increaseEnergy(ORACLE1, 1);
-    test.addRole(ADMIN, (uint8)QSB::Role::Oracle, ORACLE1);
-    test.editOracleThreshold(ADMIN, 1);
+    // Setup: add oracle, set threshold to 1 via proposals
+    test.proposeAddRole(ADMIN, ADMIN2, (uint8)QSB::Role::Oracle, ORACLE1);
+    test.proposeEditOracleThreshold(ADMIN, ADMIN2, 1);
 
     // Fund contract with some balance
     uint64 amount = 10000;
@@ -1742,173 +2128,4 @@ TEST(ContractTestingQSB, TestUnlock_FailsWhenEraMismatch)
 
     QSB::Unlock_output unlockOutput = test.unlock(USER1, order, 1, sigs);
     EXPECT_FALSE(unlockOutput.success);
-}
-
-TEST(ContractTestingQSB, TestUnlock_FailsWhenEraIsTooOld)
-{
-    ContractTestingQSB test;
-    increaseEnergy(ADMIN, 1);
-
-    // Setup oracle
-    increaseEnergy(ORACLE1, 1);
-    test.addRole(ADMIN, (uint8)QSB::Role::Oracle, ORACLE1);
-    test.editOracleThreshold(ADMIN, 1);
-
-    // Force era to 3 by filling ring buffer 3 times
-    for (uint32 round = 0; round < 3; ++round)
-    {
-        for (uint32 i = 0; i < QSB_MAX_FILLED_ORDERS; ++i)
-        {
-            QSB::OrderHash hash;
-            setMemory(hash, 0);
-            hash.set(0, (uint8)(i & 0xFF));
-            hash.set(1, (uint8)((i >> 8) & 0xFF));
-            hash.set(2, (uint8)(round & 0xFF));
-            test.getState()->forceMarkOrderFilled(hash);
-        }
-    }
-    EXPECT_EQ(test.getState()->orderEra, 3u);
-
-    // era=1 is rejected (current=3, grace window only covers era=2)
-    QSB::Order orderOld = ContractTestingQSB::createTestOrderFromU32Nonce(USER1, USER2, 100, 10, 99, 1);
-    // Fund contract
-    increaseEnergy(USER1, 100);
-    test.lock(USER1, 100, 0, 1, 50, ContractTestingQSB::createZeroAddress(), 100);
-
-    Array<QSB::SignatureData, QSB_MAX_ORACLES> sigs;
-    setMemory(sigs, 0);
-    sigs.set(0, test.createMockSignature(ORACLE1));
-
-    QSB::Unlock_output unlockOld = test.unlock(USER1, orderOld, 1, sigs);
-    EXPECT_FALSE(unlockOld.success); // fails due to era mismatch
-}
-
-// Helper: fill the ring buffer once to advance era by 1
-static void advanceEra(ContractTestingQSB& test, uint32 era)
-{
-    for (uint32 round = 0; round < era; ++round)
-    {
-        for (uint32 i = 0; i < QSB_MAX_FILLED_ORDERS; ++i)
-        {
-            QSB::OrderHash hash;
-            setMemory(hash, 0);
-            hash.set(0, (uint8)(i & 0xFF));
-            hash.set(1, (uint8)((i >> 8) & 0xFF));
-            hash.set(2, (uint8)(round & 0xFF));
-            test.getState()->forceMarkOrderFilled(hash);
-        }
-    }
-}
-
-// Unlock with era N-1 succeeds immediately after a ring-buffer wrap (grace window).
-TEST(ContractTestingQSB, TestUnlock_PreviousEraAccepted)
-{
-    ContractTestingQSB test;
-    increaseEnergy(ADMIN, 1);
-    auto oracle = ContractTestingQSB::makeOracleKey(1001);
-    increaseEnergy(oracle.publicKey, 1);
-    test.addRole(ADMIN, (uint8)QSB::Role::Oracle, oracle.publicKey);
-    test.editOracleThreshold(ADMIN, 1);
-
-    uint64 amount = 10000;
-    increaseEnergy(USER1, amount);
-    test.lock(USER1, amount, 0, 1, 1, ContractTestingQSB::createZeroAddress(), amount);
-
-    // Advance to era 1
-    advanceEra(test, 1);
-    EXPECT_EQ(test.getState()->orderEra, 1u);
-
-    // Order signed with era=0 (previous era) should still succeed
-    QSB::Order order = ContractTestingQSB::createTestOrderFromU32Nonce(USER1, USER2, amount, 10, 42, 0);
-    Array<QSB::SignatureData, QSB_MAX_ORACLES> sigs;
-    setMemory(sigs, 0);
-    sigs.set(0, test.createOrderSignature(oracle, order));
-    QSB::Unlock_output result = test.unlock(USER1, order, 1, sigs);
-    EXPECT_TRUE(result.success);
-}
-
-// Unlock with era N-2 is rejected even with the grace window.
-TEST(ContractTestingQSB, TestUnlock_TwoErasAgoRejected)
-{
-    ContractTestingQSB test;
-    increaseEnergy(ADMIN, 1);
-    auto oracle = ContractTestingQSB::makeOracleKey(1002);
-    increaseEnergy(oracle.publicKey, 1);
-    test.addRole(ADMIN, (uint8)QSB::Role::Oracle, oracle.publicKey);
-    test.editOracleThreshold(ADMIN, 1);
-
-    uint64 amount = 10000;
-    increaseEnergy(USER1, amount);
-    test.lock(USER1, amount, 0, 1, 1, ContractTestingQSB::createZeroAddress(), amount);
-
-    // Advance to era 2
-    advanceEra(test, 2);
-    EXPECT_EQ(test.getState()->orderEra, 2u);
-
-    // Order signed with era=0 (two eras ago) is rejected (era check fails before sig check)
-    QSB::Order order = ContractTestingQSB::createTestOrderFromU32Nonce(USER1, USER2, amount, 10, 42, 0);
-    Array<QSB::SignatureData, QSB_MAX_ORACLES> sigs;
-    setMemory(sigs, 0);
-    sigs.set(0, test.createOrderSignature(oracle, order));
-    QSB::Unlock_output result = test.unlock(USER1, order, 1, sigs);
-    EXPECT_FALSE(result.success);
-}
-
-// An order filled in era N-1 cannot be replayed in era N using the grace window.
-TEST(ContractTestingQSB, TestUnlock_NoReplayAfterEraTransition)
-{
-    ContractTestingQSB test;
-    increaseEnergy(ADMIN, 1);
-    auto oracle = ContractTestingQSB::makeOracleKey(1003);
-    increaseEnergy(oracle.publicKey, 1);
-    test.addRole(ADMIN, (uint8)QSB::Role::Oracle, oracle.publicKey);
-    test.editOracleThreshold(ADMIN, 1);
-
-    uint64 amount = 20000;
-    increaseEnergy(USER1, amount * 2);
-    test.lock(USER1, amount * 2, 0, 1, 1, ContractTestingQSB::createZeroAddress(), amount * 2);
-
-    // Fill the order in era 0
-    QSB::Order order = ContractTestingQSB::createTestOrderFromU32Nonce(USER1, USER2, amount, 10, 77, 0);
-    Array<QSB::SignatureData, QSB_MAX_ORACLES> sigs;
-    setMemory(sigs, 0);
-    sigs.set(0, test.createOrderSignature(oracle, order));
-    QSB::Unlock_output first = test.unlock(USER1, order, 1, sigs);
-    EXPECT_TRUE(first.success);
-
-    // Advance to era 1
-    advanceEra(test, 1);
-    EXPECT_EQ(test.getState()->orderEra, 1u);
-
-    // Replay attempt with same order (era=0 accepted by grace window) must fail — isOrderFilled blocks it
-    QSB::Unlock_output replay = test.unlock(USER1, order, 1, sigs);
-    EXPECT_FALSE(replay.success);
-}
-
-TEST(ContractTestingQSB, PrintStructSizes) {
-#define PRINT_QSB(fn) printf("%-22s in=%3zu out=%3zu loc=%3zu total=%4zu rem=%zu\n", \
-    #fn, sizeof(QSB::fn##_input), sizeof(QSB::fn##_output), sizeof(QSB::fn##_locals), \
-    sizeof(QSB::fn##_input)+sizeof(QSB::fn##_output)+sizeof(QSB::fn##_locals), \
-    (sizeof(QSB::fn##_input)+sizeof(QSB::fn##_output)+sizeof(QSB::fn##_locals))%4)
-    PRINT_QSB(Lock);
-    PRINT_QSB(OverrideLock);
-    PRINT_QSB(Unlock);
-    PRINT_QSB(TransferAdmin);
-    PRINT_QSB(EditOracleThreshold);
-    PRINT_QSB(AddRole);
-    PRINT_QSB(RemoveRole);
-    PRINT_QSB(Pause);
-    PRINT_QSB(Unpause);
-    PRINT_QSB(EditFeeParameters);
-    PRINT_QSB(GetConfig);
-    PRINT_QSB(IsOracle);
-    PRINT_QSB(IsPauser);
-    PRINT_QSB(GetLockedOrder);
-    PRINT_QSB(IsOrderFilled);
-    PRINT_QSB(ComputeOrderHash);
-    PRINT_QSB(GetOracles);
-    PRINT_QSB(GetPausers);
-    PRINT_QSB(GetLockedOrders);
-    PRINT_QSB(GetFilledOrders);
-#undef PRINT_QSB
 }

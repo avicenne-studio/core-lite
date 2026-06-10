@@ -46,6 +46,26 @@ static constexpr uint32 QSBLogThresholdUpdated = 7;
 static constexpr uint32 QSBLogRoleGranted = 8;
 static constexpr uint32 QSBLogRoleRevoked = 9;
 static constexpr uint32 QSBLogFeeParametersUpdated = 10;
+static constexpr uint32 QSBLogProposalCreated   = 11;
+static constexpr uint32 QSBLogProposalApproved  = 12;
+static constexpr uint32 QSBLogProposalExecuted  = 13;
+static constexpr uint32 QSBLogProposalCancelled = 14;
+
+// Multisig admin constants
+static constexpr uint32 QSB_MAX_ADMINS               = 8;   // approvedMask is uint8; must stay ≤ 8
+static constexpr uint32 QSB_MAX_PROPOSALS            = 16;
+static constexpr uint32 QSB_MAX_PROPOSALS_PER_ADMIN  = 3;
+static constexpr uint32 QSB_PROPOSAL_EXPIRY_EPOCHS   = 4;   // ~4 weeks
+
+// Proposal types
+static constexpr uint8 QSBPropAddAdmin            = 1;
+static constexpr uint8 QSBPropRemoveAdmin         = 2;
+static constexpr uint8 QSBPropSetAdminThreshold   = 3;
+static constexpr uint8 QSBPropAddRole             = 4;
+static constexpr uint8 QSBPropRemoveRole          = 5;
+static constexpr uint8 QSBPropEditOracleThreshold = 6;
+static constexpr uint8 QSBPropEditFeeParameters   = 7;
+static constexpr uint8 QSBPropUnpause             = 8;
 
 // Generic reason codes for logging
 static constexpr uint8 QSBReasonNone = 0;
@@ -73,7 +93,17 @@ static constexpr uint8 QSBReasonInvalidAdmin = 21;
 static constexpr uint8 QSBReasonInvalidRole = 22;
 static constexpr uint8 QSBReasonOrderNotFound = 23;
 static constexpr uint8 QSBReasonOverrideLimitReached = 24;
-// 20 reserved for future use
+// Multisig admin reason codes
+static constexpr uint8 QSBReasonProposalNotFound   = 25;
+static constexpr uint8 QSBReasonProposalExpired    = 26;
+static constexpr uint8 QSBReasonAlreadyApproved    = 27;
+static constexpr uint8 QSBReasonProposalFull       = 28;
+static constexpr uint8 QSBReasonWouldLockContract  = 29;
+static constexpr uint8 QSBReasonNotProposer        = 30;
+static constexpr uint8 QSBReasonAlreadyAdmin       = 31;
+static constexpr uint8 QSBReasonAdminFull          = 32;
+static constexpr uint8 QSBReasonTooManyProposals   = 33;
+static constexpr uint8 QSBReasonInvalidProposalType = 34;
 
 struct QSB2
 {
@@ -254,6 +284,44 @@ public:
 		sint8 _terminator;
 	};
 
+	struct QSBLogProposalMessage
+	{
+		uint32 _contractIndex;
+		uint32 _type;
+		uint8  proposalId;
+		uint8  proposalType;
+		id     proposer;
+		id     actor;
+		uint8  approvalCount;
+		uint8  success;
+		uint8  reasonCode;
+		sint8  _terminator;
+	};
+
+	// Union-style: fields used depend on proposalType. Unused fields are zero.
+	struct AdminProposal
+	{
+		uint8  proposalType;        // QSBProp* constant
+		uint8  active;              // 1 = slot in use
+		uint8  executed;            // 1 = executed successfully
+
+		id     proposer;            // admin who created this proposal
+		uint32 createdEpoch;        // for expiry: createdEpoch + QSB_PROPOSAL_EXPIRY_EPOCHS
+
+		uint8  approvalCount;       // cached popcount of approvedMask
+		uint8  approvedMask;        // bit i = admins[i] approved (max 8 admins)
+
+		// Payload — fields used depend on proposalType
+		id     targetId;            // AddAdmin, RemoveAdmin, AddRole/RemoveRole account
+		uint8  role;                // AddRole, RemoveRole: (uint8)Role::Oracle or Role::Pauser
+		uint8  newAdminThreshold;   // SetAdminThreshold
+		uint8  newOracleThreshold;  // EditOracleThreshold
+		id     protocolFeeRecipient;
+		id     oracleFeeRecipient;
+		uint32 bpsFee;
+		uint32 protocolFee;
+	};
+
 	// ---------------------------------------------------------------------
 	// User-facing I/O structures
 	// ---------------------------------------------------------------------
@@ -377,6 +445,42 @@ public:
 		bit success;
 	};
 
+	// Propose: create a typed admin proposal (proposer auto-approves)
+	struct Propose_input
+	{
+		uint8  proposalType;
+		id     targetId;
+		uint8  role;
+		uint8  newAdminThreshold;
+		uint8  newOracleThreshold;
+		id     protocolFeeRecipient;
+		id     oracleFeeRecipient;
+		uint32 bpsFee;
+		uint32 protocolFee;
+	};
+	struct Propose_output
+	{
+		uint8 proposalId;   // slot index; valid only when success == true
+		bit   success;
+		uint8 reasonCode;
+	};
+
+	struct ApproveProposal_input  { uint8 proposalId; };
+	struct ApproveProposal_output { bit success; bit executed; uint8 reasonCode; };
+
+	struct CancelProposal_input   { uint8 proposalId; };
+	struct CancelProposal_output  { bit success; uint8 reasonCode; };
+
+	struct GetProposal_input  { uint8 proposalId; };
+	struct GetProposal_output { bit exists; AdminProposal proposal; };
+
+	struct GetProposals_input  {};
+	struct GetProposals_output
+	{
+		uint8 count;
+		Array<AdminProposal, QSB_MAX_PROPOSALS> proposals;
+	};
+
 	// ---------------------------------------------------------------------
 	// View / frontend helper functions
 	// ---------------------------------------------------------------------
@@ -387,15 +491,17 @@ public:
 
 	struct GetConfig_output
 	{
-		id admin;
-		id protocolFeeRecipient;
-		id oracleFeeRecipient;
+		uint8  adminCount;
+		uint8  adminThreshold;
+		Array<id, QSB_MAX_ADMINS> admins;
+		id     protocolFeeRecipient;
+		id     oracleFeeRecipient;
 		uint32 bpsFee;
 		uint32 protocolFee;
 		uint32 oracleCount;
 		uint32 pauserCount;
-		uint8 oracleThreshold;
-		bit paused;
+		uint8  oracleThreshold;
+		bit    paused;
 		uint32 orderEra;
 	};
 
@@ -506,9 +612,14 @@ public:
 	// ---------------------------------------------------------------------
 	struct StateData
 	{
-		id admin;
-		id protocolFeeRecipient; // receives protocolFeeAmount
-		id oracleFeeRecipient;   // receives oracleFeeAmount
+		// Multisig admin (replaces single `id admin`)
+		Array<id, QSB_MAX_ADMINS> admins;  // zero entry = empty slot
+		uint8 adminCount;                   // number of active admins
+		uint8 adminThreshold;               // M in M-of-N (always ≥ 1, always ≤ adminCount)
+		Array<AdminProposal, QSB_MAX_PROPOSALS> proposals;
+
+		id protocolFeeRecipient;
+		id oracleFeeRecipient;
 		Array<RoleEntry, QSB_MAX_ORACLES> oracles;
 		Array<RoleEntry, QSB_MAX_PAUSERS> pausers;
 		Array<FilledOrderEntry, QSB_MAX_FILLED_ORDERS> filledOrders;
@@ -518,10 +629,10 @@ public:
 		uint32 lastLockedOrdersNextOverwriteIdx;
 		uint32 oracleCount;
 		uint32 pauserCount;
-		uint32 bpsFee;               // fee taken in BPS (base 10000) from netAmount
-		uint32 protocolFee;          // percent of BPS fee sent to protocol (base 100)
-		uint8 oracleThreshold; // percent [1..100]
-		bit paused;
+		uint32 bpsFee;
+		uint32 protocolFee;
+		uint8  oracleThreshold; // percent [1..100]
+		bit    paused;
 		uint32 orderEra;
 	};
 
@@ -581,24 +692,187 @@ protected:
 		msg.orderEra = order.orderEra;
 	}
 
-	// Check if caller is current admin (or if admin is not yet set, allow bootstrap)
-	inline static bool isAdmin(const QPI::ContractState<StateData, CONTRACT_INDEX>& state, const id& who)
+	// Popcount for uint8 approvedMask (used by multisig approval tracking)
+	inline static uint8 countBitsUint8(uint8 mask, uint8 i)
 	{
-		if (isZero(state.get().admin))
-			return true;
-		return who == state.get().admin;
+		uint8 count = 0;
+		for (i = 0; i < 8; ++i)
+		{
+			if (mask & (uint8)(1u << i)) ++count;
+		}
+		return count;
+	}
+
+	// Check if caller is in the admin array
+	inline static bool isAdmin(const QPI::ContractState<StateData, CONTRACT_INDEX>& state, const id& who, uint32 i)
+	{
+		for (i = 0; i < QSB_MAX_ADMINS; ++i)
+		{
+			if (!isZero(state.get().admins.get(i)) && state.get().admins.get(i) == who)
+				return true;
+		}
+		return false;
+	}
+
+	// Find admin slot index; returns NULL_INDEX if not found
+	inline static sint64 findAdminIndex(const QPI::ContractState<StateData, CONTRACT_INDEX>& state, const id& who, uint32 i)
+	{
+		for (i = 0; i < QSB_MAX_ADMINS; ++i)
+		{
+			if (!isZero(state.get().admins.get(i)) && state.get().admins.get(i) == who)
+				return (sint64)i;
+		}
+		return NULL_INDEX;
 	}
 
 	// Check if caller is admin or has pauser role
 	inline static bool isAdminOrPauser(const QPI::ContractState<StateData, CONTRACT_INDEX>& state, const id& who, uint32 i)
 	{
-		if (isAdmin(state, who))
+		if (isAdmin(state, who, 0))
 			return true;
 
 		for (i = 0; i < state.get().pausers.capacity(); ++i)
 		{
 			if (state.get().pausers.get(i).active && state.get().pausers.get(i).account == who)
 				return true;
+		}
+		return false;
+	}
+
+	// Cancel all pending (active) proposals — called when admin set changes
+	inline static void cancelAllPendingProposals(QPI::ContractState<StateData, CONTRACT_INDEX>& state, uint32 i)
+	{
+		AdminProposal prop;
+		for (i = 0; i < QSB_MAX_PROPOSALS; ++i)
+		{
+			prop = state.get().proposals.get(i);
+			if (prop.active)
+			{
+				prop.active = 0;
+				state.mut().proposals.set(i, prop);
+			}
+		}
+	}
+
+	// Execute the payload of an approved proposal. Returns true on success.
+	// Pure state mutation — no qpi access.
+	inline static bool executeProposalPayload(QPI::ContractState<StateData, CONTRACT_INDEX>& state, const AdminProposal& prop, uint32 i)
+	{
+		RoleEntry entry;
+		sint64 idx;
+
+		if (prop.proposalType == QSBPropAddAdmin)
+		{
+			for (i = 0; i < QSB_MAX_ADMINS; ++i)
+			{
+				if (isZero(state.get().admins.get(i)))
+				{
+					state.mut().admins.set(i, prop.targetId);
+					state.mut().adminCount = state.get().adminCount + 1;
+					return true;
+				}
+			}
+			return false;
+		}
+		else if (prop.proposalType == QSBPropRemoveAdmin)
+		{
+			idx = findAdminIndex(state, prop.targetId, 0);
+			state.mut().admins.set((uint32)idx, NULL_ID);
+			state.mut().adminCount = state.get().adminCount - 1;
+			return true;
+		}
+		else if (prop.proposalType == QSBPropSetAdminThreshold)
+		{
+			state.mut().adminThreshold = prop.newAdminThreshold;
+			return true;
+		}
+		else if (prop.proposalType == QSBPropAddRole)
+		{
+			if (prop.role == (uint8)Role::Oracle)
+			{
+				if (findOracleIndex(state, prop.targetId, 0) != NULL_INDEX)
+					return true;
+				for (i = 0; i < state.get().oracles.capacity(); ++i)
+				{
+					entry = state.get().oracles.get(i);
+					if (!entry.active)
+					{
+						entry.account = prop.targetId;
+						entry.active  = true;
+						state.mut().oracles.set(i, entry);
+						++state.mut().oracleCount;
+						return true;
+					}
+				}
+				return false;
+			}
+			else if (prop.role == (uint8)Role::Pauser)
+			{
+				if (findPauserIndex(state, prop.targetId, 0) != NULL_INDEX)
+					return true;
+				for (i = 0; i < state.get().pausers.capacity(); ++i)
+				{
+					entry = state.get().pausers.get(i);
+					if (!entry.active)
+					{
+						entry.account = prop.targetId;
+						entry.active  = true;
+						state.mut().pausers.set(i, entry);
+						++state.mut().pauserCount;
+						return true;
+					}
+				}
+				return false;
+			}
+			return false;
+		}
+		else if (prop.proposalType == QSBPropRemoveRole)
+		{
+			if (prop.role == (uint8)Role::Oracle)
+			{
+				idx = findOracleIndex(state, prop.targetId, 0);
+				if (idx == NULL_INDEX)
+					return true;
+				entry = state.get().oracles.get((uint32)idx);
+				entry.active = false;
+				state.mut().oracles.set((uint32)idx, entry);
+				if (state.get().oracleCount > 0) --state.mut().oracleCount;
+				return true;
+			}
+			else if (prop.role == (uint8)Role::Pauser)
+			{
+				idx = findPauserIndex(state, prop.targetId, 0);
+				if (idx == NULL_INDEX)
+					return true;
+				entry = state.get().pausers.get((uint32)idx);
+				entry.active = false;
+				state.mut().pausers.set((uint32)idx, entry);
+				if (state.get().pauserCount > 0) --state.mut().pauserCount;
+				return true;
+			}
+			return false;
+		}
+		else if (prop.proposalType == QSBPropEditOracleThreshold)
+		{
+			state.mut().oracleThreshold = prop.newOracleThreshold;
+			return true;
+		}
+		else if (prop.proposalType == QSBPropEditFeeParameters)
+		{
+			if (prop.bpsFee != 0 && prop.bpsFee <= QSB_MAX_BPS_FEE)
+				state.mut().bpsFee = prop.bpsFee;
+			if (prop.protocolFee != 0 && prop.protocolFee <= QSB_MAX_PROTOCOL_FEE)
+				state.mut().protocolFee = prop.protocolFee;
+			if (!isZero(prop.protocolFeeRecipient))
+				state.mut().protocolFeeRecipient = prop.protocolFeeRecipient;
+			if (!isZero(prop.oracleFeeRecipient))
+				state.mut().oracleFeeRecipient = prop.oracleFeeRecipient;
+			return true;
+		}
+		else if (prop.proposalType == QSBPropUnpause)
+		{
+			state.mut().paused = false;
+			return true;
 		}
 		return false;
 	}
@@ -970,16 +1244,44 @@ public:
 	// View helpers
 	PUBLIC_FUNCTION(GetConfig)
 	{
-		output.admin = state.get().admin;
+		output.adminCount     = state.get().adminCount;
+		output.adminThreshold = state.get().adminThreshold;
+		output.admins         = state.get().admins;
 		output.protocolFeeRecipient = state.get().protocolFeeRecipient;
-		output.oracleFeeRecipient = state.get().oracleFeeRecipient;
-		output.bpsFee = state.get().bpsFee;
-		output.protocolFee = state.get().protocolFee;
-		output.oracleCount = state.get().oracleCount;
-		output.pauserCount = state.get().pauserCount;
+		output.oracleFeeRecipient   = state.get().oracleFeeRecipient;
+		output.bpsFee         = state.get().bpsFee;
+		output.protocolFee    = state.get().protocolFee;
+		output.oracleCount    = state.get().oracleCount;
+		output.pauserCount    = state.get().pauserCount;
 		output.oracleThreshold = state.get().oracleThreshold;
-		output.paused = state.get().paused;
-		output.orderEra = state.get().orderEra;
+		output.paused         = state.get().paused;
+		output.orderEra       = state.get().orderEra;
+	}
+
+	PUBLIC_FUNCTION(GetProposal)
+	{
+		output.exists = false;
+		if (input.proposalId < QSB_MAX_PROPOSALS)
+		{
+			output.proposal = state.get().proposals.get(input.proposalId);
+			output.exists   = output.proposal.active;
+		}
+	}
+
+	struct GetProposals_locals { uint32 i; AdminProposal prop; };
+	PUBLIC_FUNCTION_WITH_LOCALS(GetProposals)
+	{
+		output.count = 0;
+		setMemory(output.proposals, 0);
+		for (locals.i = 0; locals.i < QSB_MAX_PROPOSALS; ++locals.i)
+		{
+			locals.prop = state.get().proposals.get(locals.i);
+			if (locals.prop.active)
+			{
+				output.proposals.set(output.count, locals.prop);
+				++output.count;
+			}
+		}
 	}
 
 	PUBLIC_FUNCTION(IsOracle)
@@ -1436,350 +1738,277 @@ public:
 	}
 
 	// ---------------------------------------------------------------------
-	// Admin procedures
+	// Admin procedures (multisig)
 	// ---------------------------------------------------------------------
 
-	struct TransferAdmin_locals
+	struct Propose_locals
 	{
-		QSBLogAdminTransferredMessage logMsg;
-	};
-
-	PUBLIC_PROCEDURE_WITH_LOCALS(TransferAdmin)
-	{
-		locals.logMsg._contractIndex = SELF_INDEX;
-		locals.logMsg._type = QSBLogAdminTransferred;
-		locals.logMsg.previousAdmin = state.get().admin;
-		locals.logMsg.newAdmin = input.newAdmin;
-		locals.logMsg.success = 0;
-		locals.logMsg.reasonCode = QSBReasonNone;
-		locals.logMsg._terminator = 0;
-
-		output.success = false;
-
-		// Refund any attached funds
-		if (qpi.invocationReward() > 0)
-		{
-			qpi.transfer(qpi.invocator(), qpi.invocationReward());
-		}
-
-		if (!isAdmin(state, qpi.invocator()))
-		{
-			locals.logMsg.reasonCode = QSBReasonNotAdmin;
-			LOG_INFO(locals.logMsg);
-			return;
-		}
-
-		if (isZero(input.newAdmin))
-		{
-			locals.logMsg.reasonCode = QSBReasonInvalidAdmin;
-			LOG_INFO(locals.logMsg);
-			return;
-		}
-
-		state.mut().admin = input.newAdmin;
-		output.success = true;
-		locals.logMsg.success = 1;
-		LOG_INFO(locals.logMsg);
-	}
-
-	struct EditOracleThreshold_locals
-	{
-		QSBLogThresholdUpdatedMessage logMsg;
-	};
-
-	PUBLIC_PROCEDURE_WITH_LOCALS(EditOracleThreshold)
-	{
-		output.success = false;
-		output.oldThreshold = state.get().oracleThreshold;
-
-		if (qpi.invocationReward() > 0)
-		{
-			qpi.transfer(qpi.invocator(), qpi.invocationReward());
-		}
-
-		if (!isAdmin(state, qpi.invocator()))
-		{
-			locals.logMsg._contractIndex = SELF_INDEX;
-			locals.logMsg._type = QSBLogThresholdUpdated;
-			locals.logMsg.oldThreshold = output.oldThreshold;
-			locals.logMsg.newThreshold = input.newThreshold;
-			locals.logMsg.success = 0;
-			locals.logMsg.reasonCode = QSBReasonNotAdmin;
-			locals.logMsg._terminator = 0;
-			LOG_INFO(locals.logMsg);
-			return;
-		}
-
-		if (input.newThreshold == 0 || input.newThreshold > 100)
-		{
-			locals.logMsg._contractIndex = SELF_INDEX;
-			locals.logMsg._type = QSBLogThresholdUpdated;
-			locals.logMsg.oldThreshold = output.oldThreshold;
-			locals.logMsg.newThreshold = input.newThreshold;
-			locals.logMsg.success = 0;
-			locals.logMsg.reasonCode = QSBReasonInvalidThreshold;
-			locals.logMsg._terminator = 0;
-			LOG_INFO(locals.logMsg);
-			return;
-		}
-
-		state.mut().oracleThreshold  = input.newThreshold;
-		output.success   = true;
-		locals.logMsg._contractIndex = SELF_INDEX;
-		locals.logMsg._type = QSBLogThresholdUpdated;
-		locals.logMsg.oldThreshold = output.oldThreshold;
-		locals.logMsg.newThreshold = input.newThreshold;
-		locals.logMsg.success = 1;
-		locals.logMsg.reasonCode = QSBReasonNone;
-		locals.logMsg._terminator = 0;
-		LOG_INFO(locals.logMsg);
-	}
-
-	struct AddRole_locals
-	{
-		RoleEntry entry;
+		sint64 adminIdx;
 		uint32 i;
-		QSBLogRoleMessage logMsg;
+		uint8  slotIdx;
+		uint8  adminProposalCount;
+		AdminProposal prop;
+		bool   execOk;
+		QSBLogProposalMessage logMsg;
 	};
 
-	PUBLIC_PROCEDURE_WITH_LOCALS(AddRole)
+	PUBLIC_PROCEDURE_WITH_LOCALS(Propose)
 	{
-		output.success = false;
+		output.success    = false;
+		output.proposalId = 0;
+		output.reasonCode = QSBReasonNone;
 
 		if (qpi.invocationReward() > 0)
-		{
 			qpi.transfer(qpi.invocator(), qpi.invocationReward());
+
+		locals.adminIdx = findAdminIndex(state, qpi.invocator(), 0);
+		if (locals.adminIdx == NULL_INDEX)
+		{ output.reasonCode = QSBReasonNotAdmin; return; }
+
+		if (input.proposalType == 0 || input.proposalType > QSBPropUnpause)
+		{ output.reasonCode = QSBReasonInvalidRole; return; }
+
+		// Per-type payload validation
+		if (input.proposalType == QSBPropAddAdmin)
+		{
+			if (isZero(input.targetId))
+			{ output.reasonCode = QSBReasonInvalidAdmin; return; }
+			if (findAdminIndex(state, input.targetId, 0) != NULL_INDEX)
+			{ output.reasonCode = QSBReasonAlreadyAdmin; return; }
+			if (state.get().adminCount >= QSB_MAX_ADMINS)
+			{ output.reasonCode = QSBReasonAdminFull; return; }
+		}
+		else if (input.proposalType == QSBPropRemoveAdmin)
+		{
+			if (isZero(input.targetId))
+			{ output.reasonCode = QSBReasonInvalidAdmin; return; }
+			if (findAdminIndex(state, input.targetId, 0) == NULL_INDEX)
+			{ output.reasonCode = QSBReasonRoleMissing; return; }
+			if (state.get().adminCount <= 1)
+			{ output.reasonCode = QSBReasonWouldLockContract; return; }
+			if ((state.get().adminCount - 1) < state.get().adminThreshold)
+			{ output.reasonCode = QSBReasonWouldLockContract; return; }
+		}
+		else if (input.proposalType == QSBPropSetAdminThreshold)
+		{
+			if (input.newAdminThreshold == 0 || input.newAdminThreshold > state.get().adminCount)
+			{ output.reasonCode = QSBReasonInvalidThreshold; return; }
+		}
+		else if (input.proposalType == QSBPropAddRole || input.proposalType == QSBPropRemoveRole)
+		{
+			if (isZero(input.targetId))
+			{ output.reasonCode = QSBReasonInvalidAdmin; return; }
+			if (input.role != (uint8)Role::Oracle && input.role != (uint8)Role::Pauser)
+			{ output.reasonCode = QSBReasonInvalidRole; return; }
+		}
+		else if (input.proposalType == QSBPropEditOracleThreshold)
+		{
+			if (input.newOracleThreshold == 0 || input.newOracleThreshold > 100)
+			{ output.reasonCode = QSBReasonInvalidThreshold; return; }
+		}
+		else if (input.proposalType == QSBPropEditFeeParameters)
+		{
+			if (input.bpsFee > QSB_MAX_BPS_FEE || input.protocolFee > QSB_MAX_PROTOCOL_FEE)
+			{ output.reasonCode = QSBReasonInvalidFeeParams; return; }
+		}
+		else if (input.proposalType != QSBPropUnpause)
+		{ output.reasonCode = QSBReasonInvalidProposalType; return; }
+
+		// Enforce per-admin concurrent proposal cap
+		locals.adminProposalCount = 0;
+		for (locals.i = 0; locals.i < QSB_MAX_PROPOSALS; ++locals.i)
+		{
+			locals.prop = state.get().proposals.get(locals.i);
+			if (locals.prop.active && locals.prop.proposer == qpi.invocator())
+				++locals.adminProposalCount;
+		}
+		if (locals.adminProposalCount >= QSB_MAX_PROPOSALS_PER_ADMIN)
+		{ output.reasonCode = QSBReasonTooManyProposals; return; }
+
+		// Find free proposal slot
+		locals.slotIdx = (uint8)QSB_MAX_PROPOSALS;
+		for (locals.i = 0; locals.i < QSB_MAX_PROPOSALS; ++locals.i)
+		{
+			if (!state.get().proposals.get(locals.i).active)
+			{ locals.slotIdx = (uint8)locals.i; break; }
+		}
+		if (locals.slotIdx >= QSB_MAX_PROPOSALS)
+		{ output.reasonCode = QSBReasonProposalFull; return; }
+
+		// Build proposal; proposer auto-approves
+		setMemory(locals.prop, 0);
+		locals.prop.proposalType        = input.proposalType;
+		locals.prop.active              = 1;
+		locals.prop.executed            = 0;
+		locals.prop.proposer            = qpi.invocator();
+		locals.prop.createdEpoch        = qpi.epoch();
+		locals.prop.approvedMask        = (uint8)(1u << (uint8)locals.adminIdx);
+		locals.prop.approvalCount       = 1;
+		locals.prop.targetId            = input.targetId;
+		locals.prop.role                = input.role;
+		locals.prop.newAdminThreshold   = input.newAdminThreshold;
+		locals.prop.newOracleThreshold  = input.newOracleThreshold;
+		locals.prop.protocolFeeRecipient = input.protocolFeeRecipient;
+		locals.prop.oracleFeeRecipient   = input.oracleFeeRecipient;
+		locals.prop.bpsFee              = input.bpsFee;
+		locals.prop.protocolFee         = input.protocolFee;
+		state.mut().proposals.set(locals.slotIdx, locals.prop);
+		output.proposalId = locals.slotIdx;
+		output.success    = true;
+
+		// Execute immediately when threshold == 1 (single-admin or bootstrap mode)
+		if (state.get().adminThreshold <= 1)
+		{
+			locals.execOk = executeProposalPayload(state, locals.prop, 0);
+			locals.prop = state.get().proposals.get(locals.slotIdx);
+			locals.prop.active   = 0;
+			locals.prop.executed = locals.execOk ? 1 : 0;
+			state.mut().proposals.set(locals.slotIdx, locals.prop);
+			if (locals.execOk &&
+				(input.proposalType == QSBPropAddAdmin ||
+				 input.proposalType == QSBPropRemoveAdmin ||
+				 input.proposalType == QSBPropSetAdminThreshold))
+			{
+				cancelAllPendingProposals(state, 0);
+			}
+			output.success = locals.execOk;
 		}
 
-		if (!isAdmin(state, qpi.invocator()))
-		{
-			locals.logMsg._contractIndex = SELF_INDEX;
-			locals.logMsg._type = QSBLogRoleGranted;
-			locals.logMsg.role = input.role;
-			locals.logMsg.account = input.account;
-			locals.logMsg.caller = qpi.invocator();
-			locals.logMsg.success = 0;
-			locals.logMsg.reasonCode = QSBReasonNotAdmin;
-			locals.logMsg._terminator = 0;
-			LOG_INFO(locals.logMsg);
-			return;
-		}
-
-		if (input.role == (uint8)Role::Oracle)
-		{
-			if (findOracleIndex(state, input.account, 0) != NULL_INDEX)
-			{
-				output.success = true;
-				locals.logMsg._contractIndex = SELF_INDEX;
-				locals.logMsg._type = QSBLogRoleGranted;
-				locals.logMsg.role = input.role;
-				locals.logMsg.account = input.account;
-				locals.logMsg.caller = qpi.invocator();
-				locals.logMsg.success = 0;
-				locals.logMsg.reasonCode = QSBReasonRoleExists;
-				locals.logMsg._terminator = 0;
-				LOG_INFO(locals.logMsg);
-				return;
-			}
-
-			for (locals.i = 0; locals.i < state.get().oracles.capacity(); ++locals.i)
-			{
-				locals.entry = state.get().oracles.get(locals.i);
-				if (!locals.entry.active)
-				{
-					locals.entry.account = input.account;
-					locals.entry.active  = true;
-					state.mut().oracles.set(locals.i, locals.entry);
-					++state.mut().oracleCount;
-					output.success = true;
-					locals.logMsg._contractIndex = SELF_INDEX;
-					locals.logMsg._type = QSBLogRoleGranted;
-					locals.logMsg.role = input.role;
-					locals.logMsg.account = input.account;
-					locals.logMsg.caller = qpi.invocator();
-					locals.logMsg.success = 1;
-					locals.logMsg.reasonCode = QSBReasonNone;
-					locals.logMsg._terminator = 0;
-					LOG_INFO(locals.logMsg);
-					return;
-				}
-			}
-			locals.logMsg._contractIndex = SELF_INDEX;
-			locals.logMsg._type = QSBLogRoleGranted;
-			locals.logMsg.role = input.role;
-			locals.logMsg.account = input.account;
-			locals.logMsg.caller = qpi.invocator();
-			locals.logMsg.success = 0;
-			locals.logMsg.reasonCode = QSBReasonNoSpace;
-			locals.logMsg._terminator = 0;
-			LOG_INFO(locals.logMsg);
-			return;
-		}
-		else if (input.role == (uint8)Role::Pauser)
-		{
-			if (findPauserIndex(state, input.account, 0) != NULL_INDEX)
-			{
-				output.success = true;
-				locals.logMsg._contractIndex = SELF_INDEX;
-				locals.logMsg._type = QSBLogRoleGranted;
-				locals.logMsg.role = input.role;
-				locals.logMsg.account = input.account;
-				locals.logMsg.caller = qpi.invocator();
-				locals.logMsg.success = 0;
-				locals.logMsg.reasonCode = QSBReasonRoleExists;
-				locals.logMsg._terminator = 0;
-				LOG_INFO(locals.logMsg);
-				return;
-			}
-
-			for (locals.i = 0; locals.i < state.get().pausers.capacity(); ++locals.i)
-			{
-				locals.entry = state.get().pausers.get(locals.i);
-				if (!locals.entry.active)
-				{
-					locals.entry.account = input.account;
-					locals.entry.active  = true;
-					state.mut().pausers.set(locals.i, locals.entry);
-					++state.mut().pauserCount;
-					output.success = true;
-					locals.logMsg._contractIndex = SELF_INDEX;
-					locals.logMsg._type = QSBLogRoleGranted;
-					locals.logMsg.role = input.role;
-					locals.logMsg.account = input.account;
-					locals.logMsg.caller = qpi.invocator();
-					locals.logMsg.success = 1;
-					locals.logMsg.reasonCode = QSBReasonNone;
-					locals.logMsg._terminator = 0;
-					LOG_INFO(locals.logMsg);
-					return;
-				}
-			}
-			locals.logMsg._contractIndex = SELF_INDEX;
-			locals.logMsg._type = QSBLogRoleGranted;
-			locals.logMsg.role = input.role;
-			locals.logMsg.account = input.account;
-			locals.logMsg.caller = qpi.invocator();
-			locals.logMsg.success = 0;
-			locals.logMsg.reasonCode = QSBReasonNoSpace;
-			locals.logMsg._terminator = 0;
-			LOG_INFO(locals.logMsg);
-			return;
-		}
-		else
-		{
-			locals.logMsg._contractIndex = SELF_INDEX;
-			locals.logMsg._type = QSBLogRoleGranted;
-			locals.logMsg.role = input.role;
-			locals.logMsg.account = input.account;
-			locals.logMsg.caller = qpi.invocator();
-			locals.logMsg.success = 0;
-			locals.logMsg.reasonCode = QSBReasonInvalidRole;
-			locals.logMsg._terminator = 0;
-			LOG_INFO(locals.logMsg);
-			return;
-		}
+		locals.logMsg._contractIndex = SELF_INDEX;
+		locals.logMsg._type          = QSBLogProposalCreated;
+		locals.logMsg.proposalId     = output.proposalId;
+		locals.logMsg.proposalType   = input.proposalType;
+		locals.logMsg.proposer       = qpi.invocator();
+		locals.logMsg.actor          = qpi.invocator();
+		locals.logMsg.approvalCount  = 1;
+		locals.logMsg.success        = output.success ? 1 : 0;
+		locals.logMsg.reasonCode     = output.reasonCode;
+		locals.logMsg._terminator    = 0;
+		LOG_INFO(locals.logMsg);
 	}
 
-	struct RemoveRole_locals
+	struct ApproveProposal_locals
 	{
-		RoleEntry entry;
-		sint64 idx;
-		QSBLogRoleMessage logMsg;
+		sint64 adminIdx;
+		uint8  bitPos;
+		uint8  propType;
+		AdminProposal prop;
+		bool   execOk;
+		QSBLogProposalMessage logMsg;
 	};
 
-	PUBLIC_PROCEDURE_WITH_LOCALS(RemoveRole)
+	PUBLIC_PROCEDURE_WITH_LOCALS(ApproveProposal)
 	{
-		output.success = false;
+		output.success    = false;
+		output.executed   = false;
+		output.reasonCode = QSBReasonNone;
 
 		if (qpi.invocationReward() > 0)
-		{
 			qpi.transfer(qpi.invocator(), qpi.invocationReward());
-		}
 
-		if (!isAdmin(state, qpi.invocator()))
+		locals.adminIdx = findAdminIndex(state, qpi.invocator(), 0);
+		if (locals.adminIdx == NULL_INDEX)
+		{ output.reasonCode = QSBReasonNotAdmin; return; }
+
+		if (input.proposalId >= QSB_MAX_PROPOSALS)
+		{ output.reasonCode = QSBReasonProposalNotFound; return; }
+
+		locals.prop = state.get().proposals.get(input.proposalId);
+
+		if (!locals.prop.active)
+		{ output.reasonCode = QSBReasonProposalNotFound; return; }
+
+		if (qpi.epoch() > locals.prop.createdEpoch + QSB_PROPOSAL_EXPIRY_EPOCHS)
 		{
-			locals.logMsg._contractIndex = SELF_INDEX;
-			locals.logMsg._type = QSBLogRoleRevoked;
-			locals.logMsg.role = input.role;
-			locals.logMsg.account = input.account;
-			locals.logMsg.caller = qpi.invocator();
-			locals.logMsg.success = 0;
-			locals.logMsg.reasonCode = QSBReasonNotAdmin;
-			locals.logMsg._terminator = 0;
-			LOG_INFO(locals.logMsg);
+			locals.prop.active = 0;
+			state.mut().proposals.set(input.proposalId, locals.prop);
+			output.reasonCode = QSBReasonProposalExpired;
 			return;
 		}
 
-		if (input.role == (uint8)Role::Oracle)
-		{
-			locals.idx = findOracleIndex(state, input.account, 0);
-			if (locals.idx != NULL_INDEX)
-			{
-				locals.entry = state.get().oracles.get((uint32)locals.idx);
-				locals.entry.active = false;
-				state.mut().oracles.set((uint32)locals.idx, locals.entry);
-				if (state.get().oracleCount > 0)
-					--state.mut().oracleCount;
-				output.success = true;
+		locals.bitPos = (uint8)locals.adminIdx;
+		if (locals.bitPos < 8 && (locals.prop.approvedMask & (uint8)(1u << locals.bitPos)))
+		{ output.reasonCode = QSBReasonAlreadyApproved; return; }
 
-				locals.logMsg._contractIndex = SELF_INDEX;
-				locals.logMsg._type = QSBLogRoleRevoked;
-				locals.logMsg.role = input.role;
-				locals.logMsg.account = input.account;
-				locals.logMsg.caller = qpi.invocator();
-				locals.logMsg.success = 1;
-				locals.logMsg.reasonCode = QSBReasonNone;
-				locals.logMsg._terminator = 0;
-				LOG_INFO(locals.logMsg);
-			}
-			else
+		locals.prop.approvedMask |= (uint8)(1u << locals.bitPos);
+		locals.prop.approvalCount = countBitsUint8(locals.prop.approvedMask, 0);
+		state.mut().proposals.set(input.proposalId, locals.prop);
+		output.success = true;
+
+		if (locals.prop.approvalCount >= state.get().adminThreshold)
+		{
+			locals.propType = locals.prop.proposalType;
+			locals.execOk   = executeProposalPayload(state, locals.prop, 0);
+			locals.prop = state.get().proposals.get(input.proposalId);
+			locals.prop.active   = 0;
+			locals.prop.executed = locals.execOk ? 1 : 0;
+			state.mut().proposals.set(input.proposalId, locals.prop);
+			output.executed = true;
+			if (locals.execOk &&
+				(locals.propType == QSBPropAddAdmin ||
+				 locals.propType == QSBPropRemoveAdmin ||
+				 locals.propType == QSBPropSetAdminThreshold))
 			{
-				locals.logMsg._contractIndex = SELF_INDEX;
-				locals.logMsg._type = QSBLogRoleRevoked;
-				locals.logMsg.role = input.role;
-				locals.logMsg.account = input.account;
-				locals.logMsg.caller = qpi.invocator();
-				locals.logMsg.success = 0;
-				locals.logMsg.reasonCode = QSBReasonRoleMissing;
-				locals.logMsg._terminator = 0;
-				LOG_INFO(locals.logMsg);
+				cancelAllPendingProposals(state, 0);
 			}
 		}
-		else if (input.role == (uint8)Role::Pauser)
-		{
-			locals.idx = findPauserIndex(state, input.account, 0);
-			if (locals.idx != NULL_INDEX)
-			{
-				locals.entry = state.get().pausers.get((uint32)locals.idx);
-				locals.entry.active = false;
-				state.mut().pausers.set((uint32)locals.idx, locals.entry);
-				if (state.get().pauserCount > 0)
-					--state.mut().pauserCount;
-				output.success = true;
 
-				locals.logMsg._contractIndex = SELF_INDEX;
-				locals.logMsg._type = QSBLogRoleRevoked;
-				locals.logMsg.role = input.role;
-				locals.logMsg.account = input.account;
-				locals.logMsg.caller = qpi.invocator();
-				locals.logMsg.success = 1;
-				locals.logMsg.reasonCode = QSBReasonNone;
-				locals.logMsg._terminator = 0;
-				LOG_INFO(locals.logMsg);
-			}
-			else
-			{
-				locals.logMsg._contractIndex = SELF_INDEX;
-				locals.logMsg._type = QSBLogRoleRevoked;
-				locals.logMsg.role = input.role;
-				locals.logMsg.account = input.account;
-				locals.logMsg.caller = qpi.invocator();
-				locals.logMsg.success = 0;
-				locals.logMsg.reasonCode = QSBReasonRoleMissing;
-				locals.logMsg._terminator = 0;
-				LOG_INFO(locals.logMsg);
-			}
-		}
+		locals.logMsg._contractIndex = SELF_INDEX;
+		locals.logMsg._type          = output.executed ? QSBLogProposalExecuted : QSBLogProposalApproved;
+		locals.logMsg.proposalId     = input.proposalId;
+		locals.logMsg.proposalType   = locals.prop.proposalType;
+		locals.logMsg.proposer       = locals.prop.proposer;
+		locals.logMsg.actor          = qpi.invocator();
+		locals.logMsg.approvalCount  = locals.prop.approvalCount;
+		locals.logMsg.success        = output.success ? 1 : 0;
+		locals.logMsg.reasonCode     = output.reasonCode;
+		locals.logMsg._terminator    = 0;
+		LOG_INFO(locals.logMsg);
+	}
+
+	struct CancelProposal_locals
+	{
+		AdminProposal prop;
+		QSBLogProposalMessage logMsg;
+	};
+
+	PUBLIC_PROCEDURE_WITH_LOCALS(CancelProposal)
+	{
+		output.success    = false;
+		output.reasonCode = QSBReasonNone;
+
+		if (qpi.invocationReward() > 0)
+			qpi.transfer(qpi.invocator(), qpi.invocationReward());
+
+		if (!isAdmin(state, qpi.invocator(), 0))
+		{ output.reasonCode = QSBReasonNotAdmin; return; }
+
+		if (input.proposalId >= QSB_MAX_PROPOSALS)
+		{ output.reasonCode = QSBReasonProposalNotFound; return; }
+
+		locals.prop = state.get().proposals.get(input.proposalId);
+
+		if (!locals.prop.active)
+		{ output.reasonCode = QSBReasonProposalNotFound; return; }
+
+		if (locals.prop.proposer != qpi.invocator())
+		{ output.reasonCode = QSBReasonNotProposer; return; }
+
+		locals.prop.active = 0;
+		state.mut().proposals.set(input.proposalId, locals.prop);
+		output.success = true;
+
+		locals.logMsg._contractIndex = SELF_INDEX;
+		locals.logMsg._type          = QSBLogProposalCancelled;
+		locals.logMsg.proposalId     = input.proposalId;
+		locals.logMsg.proposalType   = locals.prop.proposalType;
+		locals.logMsg.proposer       = locals.prop.proposer;
+		locals.logMsg.actor          = qpi.invocator();
+		locals.logMsg.approvalCount  = locals.prop.approvalCount;
+		locals.logMsg.success        = 1;
+		locals.logMsg.reasonCode     = QSBReasonNone;
+		locals.logMsg._terminator    = 0;
+		LOG_INFO(locals.logMsg);
 	}
 
 	struct Pause_locals
@@ -1796,7 +2025,7 @@ public:
 			qpi.transfer(qpi.invocator(), qpi.invocationReward());
 		}
 
-		if (!isAdminOrPauser(state, qpi.invocator(), 0))
+		if (!isAdminOrPauser(state, qpi.invocator(), 0)) // Pause stays single-key (emergency brake)
 		{
 			locals.logMsg._contractIndex = SELF_INDEX;
 			locals.logMsg._type = QSBLogPaused;
@@ -1820,139 +2049,6 @@ public:
 		LOG_INFO(locals.logMsg);
 	}
 
-	struct Unpause_locals
-	{
-		QSBLogPausedMessage logMsg;
-	};
-
-	PUBLIC_PROCEDURE_WITH_LOCALS(Unpause)
-	{
-		output.success = false;
-
-		if (qpi.invocationReward() > 0)
-		{
-			qpi.transfer(qpi.invocator(), qpi.invocationReward());
-		}
-
-		if (!isAdmin(state, qpi.invocator()))
-		{
-			locals.logMsg._contractIndex = SELF_INDEX;
-			locals.logMsg._type = QSBLogUnpaused;
-			locals.logMsg.caller = qpi.invocator();
-			locals.logMsg.success = 0;
-			locals.logMsg.reasonCode = QSBReasonNotAdmin;
-			locals.logMsg._terminator = 0;
-			LOG_INFO(locals.logMsg);
-			return;
-		}
-
-		state.mut().paused = false;
-		output.success = true;
-
-		locals.logMsg._contractIndex = SELF_INDEX;
-		locals.logMsg._type = QSBLogUnpaused;
-		locals.logMsg.caller = qpi.invocator();
-		locals.logMsg.success = 1;
-		locals.logMsg.reasonCode = QSBReasonNone;
-		locals.logMsg._terminator = 0;
-		LOG_INFO(locals.logMsg);
-	}
-
-	struct EditFeeParameters_locals
-	{
-		QSBLogFeeParametersUpdatedMessage logMsg;
-	};
-
-	PUBLIC_PROCEDURE_WITH_LOCALS(EditFeeParameters)
-	{
-		output.success = false;
-
-		if (qpi.invocationReward() > 0)
-		{
-			qpi.transfer(qpi.invocator(), qpi.invocationReward());
-		}
-
-		if (!isAdmin(state, qpi.invocator()))
-		{
-			locals.logMsg._contractIndex = SELF_INDEX;
-			locals.logMsg._type = QSBLogFeeParametersUpdated;
-			locals.logMsg.bpsFee = state.get().bpsFee;
-			locals.logMsg.protocolFee = state.get().protocolFee;
-			locals.logMsg.protocolFeeRecipient = state.get().protocolFeeRecipient;
-			locals.logMsg.oracleFeeRecipient = state.get().oracleFeeRecipient;
-			locals.logMsg.success = 0;
-			locals.logMsg.reasonCode = QSBReasonNotAdmin;
-			locals.logMsg._terminator = 0;
-			LOG_INFO(locals.logMsg);
-			return;
-		}
-
-		// Validate fee ranges (when non-zero values are provided)
-		if (input.bpsFee != 0 && input.bpsFee > QSB_MAX_BPS_FEE)
-		{
-			locals.logMsg._contractIndex = SELF_INDEX;
-			locals.logMsg._type = QSBLogFeeParametersUpdated;
-			locals.logMsg.bpsFee = state.get().bpsFee;
-			locals.logMsg.protocolFee = state.get().protocolFee;
-			locals.logMsg.protocolFeeRecipient = state.get().protocolFeeRecipient;
-			locals.logMsg.oracleFeeRecipient = state.get().oracleFeeRecipient;
-			locals.logMsg.success = 0;
-			locals.logMsg.reasonCode = QSBReasonInvalidFeeParams;
-			locals.logMsg._terminator = 0;
-			LOG_INFO(locals.logMsg);
-			return;
-		}
-
-		if (input.protocolFee != 0 && input.protocolFee > QSB_MAX_PROTOCOL_FEE)
-		{
-			locals.logMsg._contractIndex = SELF_INDEX;
-			locals.logMsg._type = QSBLogFeeParametersUpdated;
-			locals.logMsg.bpsFee = state.get().bpsFee;
-			locals.logMsg.protocolFee = state.get().protocolFee;
-			locals.logMsg.protocolFeeRecipient = state.get().protocolFeeRecipient;
-			locals.logMsg.oracleFeeRecipient = state.get().oracleFeeRecipient;
-			locals.logMsg.success = 0;
-			locals.logMsg.reasonCode = QSBReasonInvalidFeeParams;
-			locals.logMsg._terminator = 0;
-			LOG_INFO(locals.logMsg);
-			return;
-		}
-
-		// Only non-zero values are updated
-		if (input.bpsFee != 0)
-		{
-			state.mut().bpsFee = input.bpsFee;
-		}
-
-		if (input.protocolFee != 0)
-		{
-			state.mut().protocolFee = input.protocolFee;
-		}
-
-		if (!isZero(input.protocolFeeRecipient))
-		{
-			state.mut().protocolFeeRecipient = input.protocolFeeRecipient;
-		}
-
-		if (!isZero(input.oracleFeeRecipient))
-		{
-			state.mut().oracleFeeRecipient = input.oracleFeeRecipient;
-		}
-
-		output.success = true;
-
-		locals.logMsg._contractIndex = SELF_INDEX;
-		locals.logMsg._type = QSBLogFeeParametersUpdated;
-		locals.logMsg.bpsFee = state.get().bpsFee;
-		locals.logMsg.protocolFee = state.get().protocolFee;
-		locals.logMsg.protocolFeeRecipient = state.get().protocolFeeRecipient;
-		locals.logMsg.oracleFeeRecipient = state.get().oracleFeeRecipient;
-		locals.logMsg.success = 1;
-		locals.logMsg.reasonCode = QSBReasonNone;
-		locals.logMsg._terminator = 0;
-		LOG_INFO(locals.logMsg);
-	}
-
 	REGISTER_USER_FUNCTIONS_AND_PROCEDURES()
 	{
 		// View functions
@@ -1966,20 +2062,21 @@ public:
 		REGISTER_USER_FUNCTION(GetPausers, 8);
 		REGISTER_USER_FUNCTION(GetLockedOrders, 9);
 		REGISTER_USER_FUNCTION(GetFilledOrders, 10);
+		REGISTER_USER_FUNCTION(GetProposal, 11);
+		REGISTER_USER_FUNCTION(GetProposals, 12);
 
 		// User procedures
 		REGISTER_USER_PROCEDURE(Lock, 1);
 		REGISTER_USER_PROCEDURE(OverrideLock, 2);
 		REGISTER_USER_PROCEDURE(Unlock, 3);
 
-		// Admin procedures
-		REGISTER_USER_PROCEDURE(TransferAdmin, 10);
-		REGISTER_USER_PROCEDURE(EditOracleThreshold, 11);
-		REGISTER_USER_PROCEDURE(AddRole, 12);
-		REGISTER_USER_PROCEDURE(RemoveRole, 13);
+		// Emergency pause — single-key, any admin or pauser
 		REGISTER_USER_PROCEDURE(Pause, 14);
-		REGISTER_USER_PROCEDURE(Unpause, 15);
-		REGISTER_USER_PROCEDURE(EditFeeParameters, 16);
+
+		// Multisig admin procedures
+		REGISTER_USER_PROCEDURE(Propose, 20);
+		REGISTER_USER_PROCEDURE(ApproveProposal, 21);
+		REGISTER_USER_PROCEDURE(CancelProposal, 22);
 	}
 
 	// ---------------------------------------------------------------------
@@ -1988,12 +2085,23 @@ public:
 
 	struct END_EPOCH_locals
 	{
-		// No periodic processing required in the current bridge design.
+		uint32 i;
+		AdminProposal prop;
 	};
 
 	END_EPOCH_WITH_LOCALS()
 	{
-		// Intentionally left empty.
+		// Sweep expired proposals
+		for (locals.i = 0; locals.i < QSB_MAX_PROPOSALS; ++locals.i)
+		{
+			locals.prop = state.get().proposals.get(locals.i);
+			if (locals.prop.active &&
+				qpi.epoch() > locals.prop.createdEpoch + QSB_PROPOSAL_EXPIRY_EPOCHS)
+			{
+				locals.prop.active = 0;
+				state.mut().proposals.set(locals.i, locals.prop);
+			}
+		}
 	}
 
 	// ---------------------------------------------------------------------
@@ -2002,29 +2110,35 @@ public:
 
 	INITIALIZE()
 	{
-		// No admin set initially; first TransferAdmin call bootstraps admin.
-		// Admin = SINUBYSBZKBSVEFQDZBQWUEJWRXCXOZNKPHIXDZWRBKXDSPJEHFAMBACXHUN (.temp/qubic-admin.keys.json)
-		state.mut().admin = id(11994886480163374182ULL, 7222723150474050185ULL, 4187743050690849231ULL, 4967671197750064684ULL);
+		// Multisig admin setup — 2-of-2 from deployment.
+		// Replace both keys with real production keys before mainnet deployment.
+		// Admin 0: id(100, 200, 300, 400)  — test key, matches ADMIN in contract_qsb.cpp
+		// Admin 1: id(101, 201, 301, 401)  — test key, matches ADMIN2 in contract_qsb.cpp
+		setMemory(state.mut().admins, 0);
+		state.mut().admins.set(0, id(100ULL, 200ULL, 300ULL, 400ULL));
+		state.mut().admins.set(1, id(101ULL, 201ULL, 301ULL, 401ULL));
+		state.mut().adminCount     = 2;
+		state.mut().adminThreshold = 2;
+		setMemory(state.mut().proposals, 0);
+
 		state.mut().paused = false;
 
-		state.mut().oracleThreshold                    = 67; // default 67% (2/3 + 1 style)
+		state.mut().oracleThreshold                    = 67;
 		state.mut().lastFilledOrdersNextOverwriteIdx   = 0;
 		state.mut().lastLockedOrdersNextOverwriteIdx   = 0;
 		state.mut().oracleCount                        = 0;
-		state.mut().pauserCount                       = 0;
+		state.mut().pauserCount                        = 0;
 
-		// Clear role mappings and filled order table
 		setMemory(state.mut().oracles, 0);
 		setMemory(state.mut().pausers, 0);
 		setMemory(state.mut().filledOrders, 0);
 		setMemory(state.mut().filledOrdersPrev, 0);
 		setMemory(state.mut().lockedOrders, 0);
 
-		// Default fee configuration: no fees(it will be decided later)
-		state.mut().bpsFee = 0;
-		state.mut().protocolFee = 0;
+		state.mut().bpsFee               = 0;
+		state.mut().protocolFee          = 0;
 		state.mut().protocolFeeRecipient = NULL_ID;
-		state.mut().oracleFeeRecipient = NULL_ID;
+		state.mut().oracleFeeRecipient   = NULL_ID;
 
 		state.mut().orderEra = 0;
 	}
